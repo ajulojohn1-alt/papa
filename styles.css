@@ -1,0 +1,277 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   A STITCH IN TIME — src/styles/main.css
+   ═══════════════════════════════════════════════════════════════════════════
+   Shell stylesheet for a canvas-first ASCII engine. The DOM renders almost
+   nothing; this file's responsibilities are:
+
+     1. FONT METRIC STABILITY — the Renderer measures one 'M' cell exactly
+        once and trusts those metrics for every subsequent frame. All game
+        text is drawn with the font stack declared here, and the custom face
+        loads with font-display:block so the browser never swaps fonts (and
+        therefore never changes cell metrics) mid-session.
+
+     2. VIEWPORT HYGIENE — full-bleed canvas, zero scrollbars, no browser
+        gesture interception (touch-action), no text selection artifacts,
+        no tap highlights. The canvas owns 100% of the interaction surface.
+
+     3. SAFETY RAILS — styling for the runtime fatal-error overlay injected
+        by src/index.js, the <noscript> fallback, and the screen-reader
+        announcement region.
+
+     4. DESIGN TOKENS — CSS custom properties mirroring the engine's packed
+        palette (ASCIIBuffer void default, Dream orange, HUD thresholds) so
+        any future DOM UI stays chromatically consistent with the canvas.
+
+   Palette provenance (engine sources of truth):
+     #0B0E14  ASCIIBuffer defaultBg — "the void"
+     #FF7700  ASCIIBuffer namedColorMap 'orange' — Dream anchor color
+     #6dff7c / #ffd24a / #ff5a5a  HUD HP threshold trio
+     #9ad7ff / #d7e3ee / #6d7c8c  interface blue / text / dim
+   ═══════════════════════════════════════════════════════════════════════ */
+
+
+/* ───────────────────────────────────────────────────────────────────────────
+   1. FONT LOADING
+   ───────────────────────────────────────────────────────────────────────────
+   The game face is expected at assets/fonts/ (see project tree). During
+   development, before the font ships, these rules 404 silently and the
+   fallback stack below takes over — the engine never breaks, it just draws
+   with the system monospace. font-display:block is deliberate: canvas cell
+   metrics must not shift after the Renderer has measured them.
+
+   unicode-range restricts the download to the glyphs the engine actually
+   uses: ASCII, box-drawing (┌─┐│), block elements (█░▓), arrows, and the
+   misc-symbol sprinkles (▼ ◈ ✦) used by the UI modules. */
+@font-face {
+    font-family: 'Stitch Mono';
+    src: url('../../assets/fonts/stitch-mono.woff2') format('woff2'),
+         url('../../assets/fonts/stitch-mono.ttf')  format('truetype');
+    font-weight: 400;
+    font-style: normal;
+    font-display: block;
+    unicode-range: U+0020-007E, U+2018-2019, U+2026, U+2190-21FF,
+                   U+2500-257F, U+2580-259F, U+25A0-25FF, U+2600-26FF;
+}
+
+@font-face {
+    font-family: 'Stitch Mono';
+    src: url('../../assets/fonts/stitch-mono-bold.woff2') format('woff2'),
+         url('../../assets/fonts/stitch-mono-bold.ttf')  format('truetype');
+    font-weight: 700;
+    font-style: normal;
+    font-display: block;
+}
+
+
+/* ───────────────────────────────────────────────────────────────────────────
+   2. DESIGN TOKENS
+   ─────────────────────────────────────────────────────────────────────────── */
+:root {
+    /* Core surfaces. */
+    --st-void:        #0B0E14;  /* ASCIIBuffer defaultBg            */
+    --st-void-raise:  #11151f;  /* panel slabs over the void        */
+    --st-frame:       #6d7c8c;  /* ASCII panel frame gray           */
+
+    /* Dimension identities. */
+    --st-dream:       #FF7700;  /* Dream World / orange anchor      */
+    --st-dream-soft:  #ff9e3d;
+    --st-drab:        #a9b8c6;  /* Drab World badge gray            */
+
+    /* Interface text. */
+    --st-text:        #d7e3ee;
+    --st-text-dim:    #6d7c8c;
+    --st-title:       #ffe9c4;
+    --st-accent:      #9ad7ff;
+
+    /* Vitals thresholds (HUD palette parity). */
+    --st-hp-high:     #6dff7c;
+    --st-hp-mid:      #ffd24a;
+    --st-hp-low:      #ff5a5a;
+
+    /* Engine-facing metrics. These are consumed only by humans; the real
+       cell metrics live in Renderer. Kept for DOM UI parity if any is
+       ever added (chat overlays, devtools). */
+    --st-font-stack:  'Stitch Mono', 'JetBrains Mono', 'Cascadia Code',
+                      'Fira Code', 'SF Mono', Consolas, 'DejaVu Sans Mono',
+                      Menlo, monospace;
+}
+
+
+/* ───────────────────────────────────────────────────────────────────────────
+   3. RESET
+   ─────────────────────────────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html,
+body {
+    height: 100%;
+}
+
+
+/* ───────────────────────────────────────────────────────────────────────────
+   4. ROOT LAYOUT
+   ─────────────────────────────────────────────────────────────────────────── */
+html {
+    color-scheme: dark;
+    background: var(--st-void);
+}
+
+body {
+    background: var(--st-void);
+    color: var(--st-text);
+    font-family: var(--st-font-stack);
+
+    /* The world must not scroll, rubber-band, or chain-scroll anywhere. */
+    overflow: hidden;
+    overscroll-behavior: none;
+
+    /* Kill mobile text affordances over the play surface. */
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+
+    /* Sub-pixel AA on DOM text (rarely used; canvas text is engine-owned). */
+    text-rendering: optimizeLegibility;
+}
+
+
+/* ───────────────────────────────────────────────────────────────────────────
+   5. THE CANVAS
+   ───────────────────────────────────────────────────────────────────────────
+   Fixed and full-bleed: getBoundingClientRect() always reports the viewport,
+   which src/index.js multiplies by devicePixelRatio for the backing store.
+   width/height here are CSS layout size only — the physical buffer is set
+   in JS, so never set canvas.width/height attributes in this file. */
+#gameCanvas {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+
+    /* Canvas is inline by default; display:block removes the baseline gap
+       that would otherwise create a sub-pixel scroll sliver. */
+    display: block;
+
+    background: var(--st-void);
+    cursor: crosshair;
+
+    /* Own the gesture space: no browser pinch-zoom, swipe-nav, or
+       scroll-chaining over the play surface. InputManager owns all of it. */
+    touch-action: none;
+
+    /* Text canvas wants smooth scaling. Deliberately NOT
+       image-rendering: pixelated — that would roughen glyph edges. */
+    image-rendering: auto;
+
+    /* Prevent iOS double-tap zoom from being synthesized on fast taps. */
+    touch-action: none;
+}
+
+/* Keyboard focus ring: the canvas is tabindex="0" so it receives keys.
+   Shown only for keyboard navigation (:focus-visible), suppressed for
+   mouse/touch clicks, replaced with a soft orange glow to stay on-theme. */
+#gameCanvas:focus {
+    outline: none;
+}
+
+#gameCanvas:focus-visible {
+    outline: 2px solid var(--st-dream);
+    outline-offset: -2px;
+    box-shadow: inset 0 0 24px rgba(255, 119, 0, 0.18);
+}
+
+
+/* ───────────────────────────────────────────────────────────────────────────
+   6. FATAL ERROR OVERLAY
+   ───────────────────────────────────────────────────────────────────────────
+   src/index.js injects #fatal-error-overlay with inline styles sufficient to
+   display even if this stylesheet fails to load. The rules below enhance it
+   when present: a slow pulse on the headline and typographic polish. */
+#fatal-error-overlay {
+    font-family: var(--st-font-stack);
+}
+
+#fatal-error-overlay h1 {
+    animation: st-fatal-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes st-fatal-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.55; }
+}
+
+
+/* ───────────────────────────────────────────────────────────────────────────
+   7. NOSCRIPT FALLBACK
+   ─────────────────────────────────────────────────────────────────────────── */
+.noscript-panel {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    padding: 2rem;
+    text-align: center;
+    background: var(--st-void);
+}
+
+.noscript-panel h1 {
+    color: var(--st-dream);
+    font-size: 1.5rem;
+    letter-spacing: 0.08em;
+}
+
+.noscript-panel p {
+    color: var(--st-text-dim);
+    max-width: 40rem;
+    line-height: 1.6;
+}
+
+
+/* ───────────────────────────────────────────────────────────────────────────
+   8. ACCESSIBILITY UTILITIES
+   ─────────────────────────────────────────────────────────────────────────── */
+/* Visually hidden but exposed to assistive technology — the standard clip
+   pattern. Used by #sr-announcer for screen-reader game-state callouts. */
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+}
+
+
+/* ───────────────────────────────────────────────────────────────────────────
+   9. REDUCED MOTION
+   ───────────────────────────────────────────────────────────────────────────
+   CSS-side compliance: suppresses every stylesheet animation. The canvas
+   effects (camera shake, flicker, lightning inversion) are engine-side;
+   systems that wish to honor this preference should read
+   matchMedia('(prefers-reduced-motion: reduce)') at boot and route it into
+   Camera.setSmoothing / WeatherSystem gating. Declared here so any DOM
+   layer — current or future — is already compliant. */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+}
