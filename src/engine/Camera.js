@@ -93,6 +93,37 @@
 /** Default damping rate constant k (see header math). ~98% in 0.5 s. */
 const DEFAULT_SMOOTHING = 8;
 
+/* ══════════════════════════════════════════════════════════════════════════
+ * ZOOM CONSTANTS
+ * ══════════════════════════════════════════════════════════════════════════
+ * The camera owns a fluid zoom exactly like its pursuit: a target level
+ * approached through the same frame-rate-independent exponential damping,
+ * so wheel input resolves to a glide, never a snap.
+ *
+ *   MIN 0.35× — macro world overview: most of a 80×36 map in one glance.
+ *   MAX 4.0× — intimate close-up: individual glyph stitches of the poncho.
+ *
+ * ZOOM SEMANTICS — camera.x/.y remain WORLD CSS pixels of the view's
+ * top-left, and viewportWidth/Height report the EFFECTIVE world-space view
+ * extent (physical / zoom). Every existing consumer that reasons in world
+ * pixels (WeatherSystem spawn bounds, HUD radar center, pursuit, clamping)
+ * therefore stays correct at any zoom without knowing zoom exists.
+ * Screen-facing consumers use worldToScreen/screenToWorld, which scale by
+ * zoom symmetrically.
+ */
+
+/** Minimum zoom (macro overview). */
+const MIN_ZOOM = 0.35;
+
+/** Maximum zoom (intimate close-up). */
+const MAX_ZOOM = 4.0;
+
+/** Damping rate constant for the zoom glide, 1/seconds. */
+const DEFAULT_ZOOM_SMOOTHING = 6;
+
+/** Zoom is considered settled below this |zoom − target| distance. */
+const ZOOM_SNAP_EPSILON = 0.001;
+
 /**
  * Distance in pixels below which the camera snaps to the target. Kills
  * sub-pixel oscillation that would otherwise churn the Renderer's rounding
@@ -213,6 +244,26 @@ export class Camera {
         /** @type {number} Live vertical shake offset, CSS pixels. */
         this._shakeY = 0;
 
+        /* ---- Zoom state ------------------------------------------------- */
+        /** @type {number} Current zoom level (1 = native cell size). */
+        this._zoom = 1;
+
+        /** @type {number} Target zoom level. */
+        this._targetZoom = 1;
+
+        /** @type {number} Zoom glide damping rate constant, 1/seconds. */
+        this._zoomSmoothing = Number.isFinite(options.zoomSmoothing) &&
+            options.zoomSmoothing > 0
+            ? options.zoomSmoothing
+            : DEFAULT_ZOOM_SMOOTHING;
+
+        /**
+         * Cursor-anchored zoom pin: while the zoom glides, the world point
+         * captured under the pointer stays under the pointer.
+         * @type {?{screenX: number, screenY: number, worldX: number, worldY: number}}
+         */
+        this._zoomAnchor = null;
+
         /* Apply initial map bounds if provided. */
         if (options.mapCols || options.mapRows) {
             this.setMapSize(options.mapCols || 0, options.mapRows || 0);
@@ -243,19 +294,60 @@ export class Camera {
         return this._shakeY;
     }
 
-    /** @returns {number} Viewport width in CSS pixels. */
-    get viewportWidth() {
-        return this._viewportW;
-    }
-
-    /** @returns {number} Viewport height in CSS pixels. */
-    get viewportHeight() {
-        return this._viewportH;
-    }
-
     /** @returns {boolean} True while a shake effect is still active. */
     get isShaking() {
         return this._shakeDuration > 0 && this._shakeElapsed < this._shakeDuration;
+    }
+
+    /** @returns {number} Current zoom level (1 = native cell size). */
+    get zoom() {
+        return this._zoom;
+    }
+
+    /** @returns {number} Target zoom level the glide is approaching. */
+    get targetZoom() {
+        return this._targetZoom;
+    }
+
+    /** @returns {boolean} True while a zoom glide or its anchor is active. */
+    get isZooming() {
+        return Math.abs(this._targetZoom - this._zoom) > ZOOM_SNAP_EPSILON ||
+            this._zoomAnchor !== null;
+    }
+
+    /**
+     * EFFECTIVE viewport width in WORLD CSS pixels (physical / zoom).
+     * This is the world-space horizontal extent of the view — the quantity
+     * every world-space consumer (spawn bounds, radar centers, clamping)
+     * needs. At zoom 1 it equals the physical width (legacy behavior).
+     * @returns {number}
+     */
+    get viewportWidth() {
+        return this._viewportW / this._zoom;
+    }
+
+    /**
+     * EFFECTIVE viewport height in WORLD CSS pixels (physical / zoom).
+     * @returns {number}
+     */
+    get viewportHeight() {
+        return this._viewportH / this._zoom;
+    }
+
+    /**
+     * PHYSICAL viewport width in CSS pixels (window size, zoom-independent).
+     * @returns {number}
+     */
+    get physicalWidth() {
+        return this._viewportW;
+    }
+
+    /**
+     * PHYSICAL viewport height in CSS pixels.
+     * @returns {number}
+     */
+    get physicalHeight() {
+        return this._viewportH;
     }
 
     /* ══════════════════════════════════════════════════════════════════════
@@ -299,8 +391,8 @@ export class Camera {
 
         /* Re-clamp immediately so a smaller map never leaves the camera
          * stranded outside the new world. */
-        this._x = this._clampAxis(this._x, this._mapW, this._viewportW);
-        this._y = this._clampAxis(this._y, this._mapH, this._viewportH);
+        this._x = this._clampAxis(this._x, this._mapW, this.effectiveViewW());
+        this._y = this._clampAxis(this._y, this._mapH, this.effectiveViewH());
         return this;
     }
 
@@ -325,8 +417,8 @@ export class Camera {
         this._mapW = this._mapCols * cellWidth;
         this._mapH = this._mapRows * cellHeight;
 
-        this._x = this._clampAxis(this._x, this._mapW, this._viewportW);
-        this._y = this._clampAxis(this._y, this._mapH, this._viewportH);
+        this._x = this._clampAxis(this._x, this._mapW, this.effectiveViewW());
+        this._y = this._clampAxis(this._y, this._mapH, this.effectiveViewH());
         return this;
     }
 
@@ -348,8 +440,8 @@ export class Camera {
         this._viewportW = width;
         this._viewportH = height;
 
-        this._x = this._clampAxis(this._x, this._mapW, this._viewportW);
-        this._y = this._clampAxis(this._y, this._mapH, this._viewportH);
+        this._x = this._clampAxis(this._x, this._mapW, this.effectiveViewW());
+        this._y = this._clampAxis(this._y, this._mapH, this.effectiveViewH());
         return this;
     }
 
@@ -368,17 +460,103 @@ export class Camera {
     }
 
     /* ══════════════════════════════════════════════════════════════════════
+     * ZOOM CONTROL
+     * ══════════════════════════════════════════════════════════════════════ */
+
+    /**
+     * Effective world-space view width (physical / zoom).
+     * @returns {number}
+     */
+    effectiveViewW() {
+        return this._viewportW / this._zoom;
+    }
+
+    /**
+     * Effective world-space view height (physical / zoom).
+     * @returns {number}
+     */
+    effectiveViewH() {
+        return this._viewportH / this._zoom;
+    }
+
+    /**
+     * Sets a new target zoom with an optional screen-space anchor.
+     *
+     * The anchor pins the world point currently under (screenX, screenY):
+     * while the zoom glides, every tick re-solves the camera position so
+     * that point stays under the pointer — the familiar map-application
+     * zoom-to-cursor. Anchoring at the viewport center reproduces
+     * classic centered zoom. The anchor is released once the glide
+     * settles or a new pursuit target takes over.
+     *
+     * @param {number} zoom Absolute target zoom (clamped to [0.35, 4]).
+     * @param {number} [screenX] Anchor screen x, CSS px (defaults to the
+     *   physical viewport center).
+     * @param {number} [screenY] Anchor screen y, CSS px.
+     * @returns {this}
+     */
+    setZoom(zoom, screenX, screenY) {
+        if (!Number.isFinite(zoom) || zoom <= 0) return this;
+
+        const next = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom));
+        if (next === this._targetZoom) return this;
+
+        const anchorX = Number.isFinite(screenX)
+            ? screenX
+            : this._viewportW / 2;
+        const anchorY = Number.isFinite(screenY)
+            ? screenY
+            : this._viewportH / 2;
+
+        const world = this.screenToWorld(anchorX, anchorY);
+        this._zoomAnchor = {
+            screenX: anchorX,
+            screenY: anchorY,
+            worldX: world.x,
+            worldY: world.y
+        };
+        this._targetZoom = next;
+        return this;
+    }
+
+    /**
+     * Multiplicative zoom request (wheel notches): target ×= factor.
+     *
+     * @param {number} factor Multiplier > 0 (> 1 zooms in).
+     * @param {number} [screenX] Anchor screen x, CSS px.
+     * @param {number} [screenY] Anchor screen y, CSS px.
+     * @returns {this}
+     */
+    zoomAt(factor, screenX, screenY) {
+        if (!Number.isFinite(factor) || factor <= 0) return this;
+        return this.setZoom(this._targetZoom * factor, screenX, screenY);
+    }
+
+    /**
+     * Cancels any in-flight zoom glide and anchor immediately.
+     * @returns {this}
+     */
+    cancelZoom() {
+        this._targetZoom = this._zoom;
+        this._zoomAnchor = null;
+        return this;
+    }
+
+    /* ══════════════════════════════════════════════════════════════════════
      * PER-TICK UPDATE
      * ══════════════════════════════════════════════════════════════════════ */
 
     /**
-     * Advances pursuit, clamping, and shake by one fixed tick.
+     * Advances zoom glide, pursuit, clamping, and shake by one fixed tick.
      *
      * Order is contractual:
-     *   1. Lerp toward the target's centered desired position.
-     *   2. Snap when inside the epsilon to stop sub-pixel churn.
-     *   3. Clamp into map bounds.
-     *   4. Advance the shake envelope.
+     *   1. Glide zoom toward its target (exponential damping, like pursuit).
+     *   2. Lerp toward the target's centered desired position, using the
+     *      EFFECTIVE (zoom-divided) viewport extent.
+     *   3. Snap when inside the epsilon to stop sub-pixel churn.
+     *   4. Re-solve the zoom anchor (cursor pin) for the new zoom level.
+     *   5. Clamp into map bounds at the effective view size.
+     *   6. Advance the shake envelope.
      *
      * @param {number} dt Fixed timestep in seconds.
      * @returns {this}
@@ -386,10 +564,23 @@ export class Camera {
     update(dt) {
         if (!Number.isFinite(dt) || dt <= 0) return this;
 
-        /* ---- 1. Exponential-damped pursuit ----------------------------- */
+        /* ---- 1. Zoom glide ------------------------------------------------ */
+        if (Math.abs(this._targetZoom - this._zoom) > ZOOM_SNAP_EPSILON) {
+            const zAlpha = 1 - Math.exp(-this._zoomSmoothing * dt);
+            this._zoom += (this._targetZoom - this._zoom) * zAlpha;
+
+            if (Math.abs(this._targetZoom - this._zoom) <= ZOOM_SNAP_EPSILON) {
+                this._zoom = this._targetZoom;
+                this._zoomAnchor = null; /* glide settled: release the pin */
+            }
+        }
+
+        /* ---- 2. Exponential-damped pursuit ------------------------------- */
         if (this._target) {
-            const desiredX = this._target.x - this._viewportW / 2;
-            const desiredY = this._target.y - this._viewportH / 2;
+            const viewW = this._viewportW / this._zoom;
+            const viewH = this._viewportH / this._zoom;
+            const desiredX = this._target.x - viewW / 2;
+            const desiredY = this._target.y - viewH / 2;
 
             /* alpha = 1 - e^(-k·dt): the exact discrete solution of the
              * continuous decay, independent of tick rate. See header. */
@@ -398,7 +589,7 @@ export class Camera {
             this._x += (desiredX - this._x) * alpha;
             this._y += (desiredY - this._y) * alpha;
 
-            /* ---- 2. Epsilon snap -------------------------------------- */
+            /* ---- 3. Epsilon snap -------------------------------------- */
             if (Math.abs(desiredX - this._x) < SNAP_EPSILON_PIXELS) {
                 this._x = desiredX;
             }
@@ -407,11 +598,17 @@ export class Camera {
             }
         }
 
-        /* ---- 3. Bounds clamping ---------------------------------------- */
-        this._x = this._clampAxis(this._x, this._mapW, this._viewportW);
-        this._y = this._clampAxis(this._y, this._mapH, this._viewportH);
+        /* ---- 4. Zoom anchor: keep the pinned world point under the pin --- */
+        if (this._zoomAnchor) {
+            this._x = this._zoomAnchor.worldX - this._zoomAnchor.screenX / this._zoom;
+            this._y = this._zoomAnchor.worldY - this._zoomAnchor.screenY / this._zoom;
+        }
 
-        /* ---- 4. Shake envelope ----------------------------------------- */
+        /* ---- 5. Bounds clamping (effective view size) --------------------- */
+        this._x = this._clampAxis(this._x, this._mapW, this.effectiveViewW());
+        this._y = this._clampAxis(this._y, this._mapH, this.effectiveViewH());
+
+        /* ---- 6. Shake envelope -------------------------------------------- */
         this._updateShake(dt);
 
         return this;
@@ -559,11 +756,11 @@ export class Camera {
     snapToTarget() {
         if (!this._target) return this;
 
-        this._x = this._target.x - this._viewportW / 2;
-        this._y = this._target.y - this._viewportH / 2;
+        this._x = this._target.x - this.effectiveViewW() / 2;
+        this._y = this._target.y - this.effectiveViewH() / 2;
 
-        this._x = this._clampAxis(this._x, this._mapW, this._viewportW);
-        this._y = this._clampAxis(this._y, this._mapH, this._viewportH);
+        this._x = this._clampAxis(this._x, this._mapW, this.effectiveViewW());
+        this._y = this._clampAxis(this._y, this._mapH, this.effectiveViewH());
         return this;
     }
 
@@ -577,14 +774,14 @@ export class Camera {
      */
     focus(worldX, worldY) {
         this._x = this._clampAxis(
-            worldX - this._viewportW / 2,
+            worldX - this.effectiveViewW() / 2,
             this._mapW,
-            this._viewportW
+            this.effectiveViewW()
         );
         this._y = this._clampAxis(
-            worldY - this._viewportH / 2,
+            worldY - this.effectiveViewH() / 2,
             this._mapH,
-            this._viewportH
+            this.effectiveViewH()
         );
         return this;
     }
@@ -596,12 +793,13 @@ export class Camera {
     /**
      * Converts world coordinates to viewport-relative screen coordinates.
      *
-     *   screen = world - cameraTopLeft
+     *   screen = (world − cameraTopLeft) × zoom + shake
      *
-     * Shake is EXCLUDED by default: gameplay systems (mouse picking, hit
-     * markers, floating combat text anchoring) want stable coordinates, not
-     * the transient presentation wobble. Pass includeShake=true when a
-     * system must match exactly what the player sees mid-shake.
+     * At zoom 1 this reduces to the legacy translation. Shake is EXCLUDED
+     * by default: gameplay systems (mouse picking, hit markers, floating
+     * combat text anchoring) want stable coordinates, not the transient
+     * presentation wobble. Pass includeShake=true when a system must match
+     * exactly what the player sees mid-shake.
      *
      * @param {number} worldX World x in CSS pixels.
      * @param {number} worldY World y in CSS pixels.
@@ -613,8 +811,8 @@ export class Camera {
         const offsetY = includeShake ? this._shakeY : 0;
 
         return {
-            x: worldX - this._x + offsetX,
-            y: worldY - this._y + offsetY
+            x: (worldX - this._x) * this._zoom + offsetX,
+            y: (worldY - this._y) * this._zoom + offsetY
         };
     }
 
@@ -623,7 +821,7 @@ export class Camera {
      * The exact inverse of worldToScreen; the primary consumer is mouse
      * picking through InputManager.getMousePosition().
      *
-     *   world = screen + cameraTopLeft
+     *   world = (screen − shake) / zoom + cameraTopLeft
      *
      * @param {number} screenX Screen x in CSS pixels.
      * @param {number} screenY Screen y in CSS pixels.
@@ -635,8 +833,8 @@ export class Camera {
         const offsetY = includeShake ? this._shakeY : 0;
 
         return {
-            x: screenX + this._x - offsetX,
-            y: screenY + this._y - offsetY
+            x: (screenX - offsetX) / this._zoom + this._x,
+            y: (screenY - offsetY) / this._zoom + this._y
         };
     }
 
@@ -686,7 +884,8 @@ export class Camera {
 
     /**
      * Visibility test for grid-cell culling in gameplay systems (minimap
-     * radar pings, off-screen indicator suppression).
+     * radar pings, off-screen indicator suppression). Uses the EFFECTIVE
+     * world-space view extents so zoomed-out overviews widen the margin.
      *
      * @param {number} col Grid column.
      * @param {number} row Grid row.
@@ -699,8 +898,8 @@ export class Camera {
 
         const viewCol0 = Math.floor(this._x / this._cellW) - margin;
         const viewRow0 = Math.floor(this._y / this._cellH) - margin;
-        const viewCol1 = Math.ceil((this._x + this._viewportW) / this._cellW) + margin;
-        const viewRow1 = Math.ceil((this._y + this._viewportH) / this._cellH) + margin;
+        const viewCol1 = Math.ceil((this._x + this.effectiveViewW()) / this._cellW) + margin;
+        const viewRow1 = Math.ceil((this._y + this.effectiveViewH()) / this._cellH) + margin;
 
         return col >= viewCol0 && col < viewCol1 && row >= viewRow0 && row < viewRow1;
     }
@@ -716,8 +915,8 @@ export class Camera {
         return (
             worldX >= this._x &&
             worldY >= this._y &&
-            worldX < this._x + this._viewportW &&
-            worldY < this._y + this._viewportH
+            worldX < this._x + this.effectiveViewW() &&
+            worldY < this._y + this.effectiveViewH()
         );
     }
 }

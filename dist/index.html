@@ -67,8 +67,8 @@
     <!-- ES module entry point. Modules are deferred by specification: this
          executes after HTML parsing, and src/index.js additionally gates on
          DOMContentLoaded/readyState before touching the DOM. -->
-  <script type="module" crossorigin src="/assets/index-C8Z2GxMY.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/index-BuPlFRvn.css">
+  <script type="module" crossorigin src="/assets/index-DP_L2kFF.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-2BVQxRUK.css">
 </head>
 
 <body>
@@ -82,11 +82,31 @@
          physical backing store is then scaled by devicePixelRatio in
          src/index.js before the Renderer measures cell metrics.
          ═══════════════════════════════════════════════════════════════ -->
+    <!-- ═══════════════════════════════════════════════════════════════════
+         The render surfaces (hybrid stack).
+
+         #glCanvas   — WebGL layer (beneath). When the browser offers
+                       WebGL2/WebGL, engine/Engine.js composites the entire
+                       ASCII grid here through a Three.js full-screen-quad
+                       fragment shader: fluid zoom/pan, radial lighting,
+                       water ripples, rain sheen, lightning X-ray inversion,
+                       orange-depletion glitch. One draw call per frame.
+                       Display-only: aria-hidden, never focusable.
+
+         #gameCanvas — Canvas 2D layer (atop, transparent when hybrid is
+                       live). Always authoritative: it alone draws the
+                       world when WebGL is unavailable, and it alone draws
+                       the HUD/dialogue/UI overlays when WebGL is live
+                       (engine/Renderer.js switches modes internally).
+         ═══════════════════════════════════════════════════════════════════ -->
+    <canvas id="glCanvas" aria-hidden="true"></canvas>
+
     <canvas id="gameCanvas"
             tabindex="0"
             role="application"
             aria-label="YUCCA — game viewport. Use WASD or arrow
-                        keys to move, Space to act, E to interact."></canvas>
+                        keys to move, Space to act, E to interact,
+                        mouse wheel to zoom."></canvas>
 
     <!-- Screen-reader announcement rail. Systems may write state changes
          (quest accepted, dimension shift) here for assistive tech. Kept

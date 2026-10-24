@@ -233,6 +233,30 @@ export function loadDimensionContent(game) {
     game.registerInteractableNPC(ira);
     game.registerInteractableNPC(vendor);
 
+    /* ---- GPU radial lights (hybrid presenter) --------------------------
+     * Static warm sources layered under the automatic player aura each
+     * frame: the grove keeper's hearth in the Dream, the mobile juice
+     * cart's orange glow in the Drab. Game filters them by the ACTIVE
+     * dimension, so the hearth never bleeds into the city. The fragment
+     * shader renders them as squared-falloff radial gradients in world
+     * pixel space (engine/Engine.js). --------------------------------- */
+    game.registerWorldLight({
+        world: WORLD.DREAM,
+        x: ira.x,
+        y: ira.y,
+        radius: 175,
+        color: '#ffcf7d',
+        intensity: 0.55
+    });
+    game.registerWorldLight({
+        world: WORLD.DRAB,
+        x: vendor.x,
+        y: vendor.y,
+        radius: 150,
+        color: '#ff7700',
+        intensity: 0.6
+    });
+
     /**
      * Entity presenter adapter. The Player is NOT updated here — Game's
      * _updatePlaying owns player.handleInput/update directly — this seam

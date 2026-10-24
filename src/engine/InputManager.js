@@ -138,6 +138,9 @@ const DEFAULT_ACTION_MAP = Object.freeze({
     QUEST_LOG: ['KeyQ'],
     WORLD_MAP: ['KeyM'],
     DIMENSION_FOCUS: ['Tab'],
+    ZOOM_IN: ['Equal', 'NumpadAdd'],
+    ZOOM_OUT: ['Minus', 'NumpadSubtract'],
+    ZOOM_RESET: ['Digit0', 'Numpad0'],
     PAUSE: ['Escape']
 });
 
@@ -228,6 +231,21 @@ export class InputManager {
         /** @type {number} Committed delta for the current tick. */
         this._lastDeltaY = 0;
 
+        /* ---- Wheel state ------------------------------------------------ */
+        /**
+         * Accumulated vertical wheel delta since the last
+         * consumeWheelDelta(). Positive deltaY (scroll down) = zoom out;
+         * negative = zoom in, matching trackpad and discrete-mouse
+         * convention. Wheel events are CONTINUOUS (not edge events): they
+         * accumulate at event time and drain on consume, so a burst of
+         * notches between two ticks resolves to one fluid camera glide.
+         * @type {number}
+         */
+        this._wheelDeltaY = 0;
+
+        /** @type {number} Accumulated horizontal wheel delta. */
+        this._wheelDeltaX = 0;
+
         /* ---- Action mapping -------------------------------------------- */
         /** @type {Map<string, Set<string>>} action → bound key codes. */
         this._actionMap = new Map();
@@ -259,6 +277,14 @@ export class InputManager {
 
         /** @type {(e: MouseEvent) => void} */
         this._onMouseUp = (event) => this._handleMouseUp(event);
+
+        /**
+         * Wheel handler: non-passive so preventDefault can stop page
+         * scroll, browser pinch-zoom (ctrl+wheel), and back/forward swipe
+         * gestures while the game surface is under the pointer.
+         * @type {(e: WheelEvent) => void}
+         */
+        this._onWheel = (event) => this._handleWheel(event);
 
         /** @type {() => void} */
         this._onBlur = () => this.releaseAll();
@@ -298,8 +324,10 @@ export class InputManager {
         if (this._canvas) {
             this._canvas.addEventListener('mousedown', this._onMouseDown);
             this._canvas.addEventListener('contextmenu', this._onContextMenu);
+            this._canvas.addEventListener('wheel', this._onWheel, { passive: false });
         } else {
             this._target.addEventListener('mousedown', this._onMouseDown);
+            this._target.addEventListener('wheel', this._onWheel, { passive: false });
         }
     }
 
@@ -322,8 +350,10 @@ export class InputManager {
         if (this._canvas) {
             this._canvas.removeEventListener('mousedown', this._onMouseDown);
             this._canvas.removeEventListener('contextmenu', this._onContextMenu);
+            this._canvas.removeEventListener('wheel', this._onWheel);
         } else {
             this._target.removeEventListener('mousedown', this._onMouseDown);
+            this._target.removeEventListener('wheel', this._onWheel);
         }
 
         this.releaseAll();
@@ -425,6 +455,27 @@ export class InputManager {
 
         this._mouseDeltaX += this._mouseX - previousX;
         this._mouseDeltaY += this._mouseY - previousY;
+    }
+
+    /**
+     * Handles wheel motion over the render surface.
+     *
+     * Always preventDefault: over the game surface a wheel notch is camera
+     * zoom, never page scroll, and ctrl+wheel (browser pinch-zoom) must
+     * not fight the engine's own zoom. Delta normalization — deltaY < 0
+     * zooms IN, > 0 zooms OUT — is the consumer's concern (Camera.zoomAt).
+     *
+     * @param {WheelEvent} event Native event.
+     * @private
+     */
+    _handleWheel(event) {
+        event.preventDefault();
+
+        if (!this._enabled) return;
+
+        this._updateMousePosition(event.clientX, event.clientY);
+        this._wheelDeltaX += event.deltaX || 0;
+        this._wheelDeltaY += event.deltaY || 0;
     }
 
     /**
@@ -581,6 +632,8 @@ export class InputManager {
         this._mouseDeltaY = 0;
         this._lastDeltaX = 0;
         this._lastDeltaY = 0;
+        this._wheelDeltaX = 0;
+        this._wheelDeltaY = 0;
     }
 
     /* ══════════════════════════════════════════════════════════════════════
@@ -671,6 +724,33 @@ export class InputManager {
      */
     getMouseDelta() {
         return { dx: this._lastDeltaX, dy: this._lastDeltaY };
+    }
+
+    /**
+     * Drains the accumulated wheel delta and reports the pointer anchor.
+     *
+     * The returned anchor is the canvas-local pointer position captured at
+     * DRAIN time — the point the camera should keep pinned while zooming
+     * (zoom-to-cursor). Wheel deltas are normalized per-device by the
+     * consumer (Camera.zoomAt takes a multiplicative factor), so pixel vs.
+     * line mode never leaks into gameplay.
+     *
+     * @returns {?{deltaX: number, deltaY: number, anchorX: number, anchorY: number}}
+     *   Null when no wheel motion accumulated since the last drain.
+     */
+    consumeWheelDelta() {
+        if (this._wheelDeltaX === 0 && this._wheelDeltaY === 0) return null;
+
+        const snapshot = {
+            deltaX: this._wheelDeltaX,
+            deltaY: this._wheelDeltaY,
+            anchorX: this._mouseX,
+            anchorY: this._mouseY
+        };
+
+        this._wheelDeltaX = 0;
+        this._wheelDeltaY = 0;
+        return snapshot;
     }
 
     /**

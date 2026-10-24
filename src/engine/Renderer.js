@@ -199,6 +199,19 @@ export class Renderer {
         /** @type {number} Increments on any palette mutation. */
         this._paletteGeneration = 0;
 
+        /* ---- Hybrid GPU delegation --------------------------------------- */
+        /**
+         * Optional GPU presenter (engine/Engine.js). When set, world-grid
+         * blits are forwarded to the WebGL compositor and this Renderer
+         * degrades to a TRANSPARENT screen-space overlay canvas hosting
+         * the HUD, dialogue, and UI layers.
+         * @type {?{present: Function, isSupported: boolean}}
+         */
+        this._glDelegate = null;
+
+        /** @type {boolean} True while a GL delegate owns world presentation. */
+        this._overlayMode = false;
+
         /* ---- CSS string & glyph caches --------------------------------- */
         /** @type {Map<number, string>} Packed color → CSS fillStyle. */
         this._cssCache = new Map();
@@ -297,6 +310,50 @@ export class Renderer {
      */
     getStats() {
         return { ...this._stats };
+    }
+
+    /** @returns {boolean} Active grayscale (Drab World) presentation mode. */
+    get grayscale() {
+        return this._grayscale;
+    }
+
+    /** @returns {?Object} The live GPU presenter, or null on the 2D path. */
+    get glDelegate() {
+        return this._glDelegate;
+    }
+
+    /** @returns {boolean} True while the GPU presenter owns the world. */
+    get isOverlay() {
+        return this._overlayMode;
+    }
+
+    /**
+     * Installs or removes the hybrid GPU presenter.
+     *
+     * With a delegate installed, world-grid renders forward to the GPU
+     * compositor and this canvas becomes a transparent overlay. Removing
+     * the delegate (or passing null) restores the classic opaque 2D path
+     * and hard-clears once so no transparent residue survives.
+     *
+     * @param {?Object} delegate engine/Engine.js instance exposing
+     *   present(buffer, camera) and isSupported.
+     * @returns {this}
+     */
+    setGLDelegate(delegate) {
+        const valid = delegate &&
+            delegate.isSupported === true &&
+            typeof delegate.present === 'function';
+
+        this._glDelegate = valid ? delegate : null;
+        this._overlayMode = this._glDelegate !== null;
+        this.invalidate();
+
+        if (!this._overlayMode) {
+            /* Repaint opaque: dropping out of overlay mode must not leave
+             * the canvas transparent above the page background. */
+            this.clear();
+        }
+        return this;
     }
 
     /* ══════════════════════════════════════════════════════════════════════
@@ -498,9 +555,14 @@ export class Renderer {
     /**
      * Begins a presentation frame.
      *
-     * Deliberately does NOT clear the canvas: the presented-cell cache owns
-     * erasure, clearing only the cells that actually change. A global clear
-     * would force a full repaint of thousands of glyphs every frame.
+     * Opaque 2D mode deliberately does NOT clear the canvas: the
+     * presented-cell cache owns erasure, clearing only the cells that
+     * actually change. A global clear would force a full repaint of
+     * thousands of glyphs every frame.
+     *
+     * Overlay mode (GPU presenter owns the world) instead clears the whole
+     * canvas to TRANSPARENT: screen-space UI is fully redrawn every frame,
+     * and stale HUD text must never accumulate.
      *
      * @returns {this}
      */
@@ -512,6 +574,10 @@ export class Renderer {
         this._stats.lastStyleChanges = 0;
 
         this._applyBaseTransform();
+
+        if (this._overlayMode) {
+            this._ctx.clearRect(0, 0, this._cssWidth, this._cssHeight);
+        }
         return this;
     }
 
@@ -564,28 +630,54 @@ export class Renderer {
     /**
      * Presents an ASCII buffer through a camera.
      *
-     * Chooses between a batched full repaint (first frame, camera moved,
-     * palette changed) and an incremental dirty-cell pass (steady state).
+     * Hybrid routing: when a GPU delegate is installed the buffer forwards
+     * to the WebGL compositor (zoom/pan/lighting/water/rain/inversion all
+     * resolve in the fragment shader) and the 2D path is skipped entirely.
+     * A GPU failure here is non-fatal: the delegate is dropped, the canvas
+     * is restored to opaque 2D mode, and the SAME call repaints through
+     * the battle-tested Canvas path.
+     *
+     * 2D path: chooses between a batched full repaint (first frame, camera
+     * moved, palette changed, zoom changed) and an incremental dirty-cell
+     * pass (steady state). Zoom scales the cell grid via ctx.scale while
+     * cell rects stay computed in world space.
      *
      * @param {ASCIIBuffer} buffer Virtual grid to present.
-     * @param {RenderCamera} [camera={}] Camera state.
+     * @param {RenderCamera} [camera={}] Camera state (`zoom` optional).
      * @returns {this}
      */
     render(buffer, camera = {}) {
+        /* ---- Hybrid GPU fast path ------------------------------------- */
+        if (this._glDelegate) {
+            try {
+                if (this._glDelegate.present(buffer, camera)) {
+                    this._stats.frameCount += 1;
+                    return this;
+                }
+            } catch (error) {
+                console.warn(
+                    '[Renderer] GPU presenter failed — reverting to Canvas 2D:',
+                    error
+                );
+                this.setGLDelegate(null);
+            }
+        }
+
         const startTime = performance.now();
 
         const camX = Math.round(camera.x || 0);
         const camY = Math.round(camera.y || 0);
         const shakeX = Math.round(camera.shakeX || 0);
         const shakeY = Math.round(camera.shakeY || 0);
+        const zoom = camera.zoom && camera.zoom > 0 ? camera.zoom : 1;
 
-        const key = this._buildCacheKey(buffer, camX, camY);
+        const key = this._buildCacheKey(buffer, camX, camY, zoom);
 
         if (key !== this._cacheKey) {
-            this._fullRepaint(buffer, camX, camY, shakeX, shakeY);
+            this._fullRepaint(buffer, camX, camY, shakeX, shakeY, zoom);
             this._cacheKey = key;
         } else {
-            this._incrementalRepaint(buffer, camX, camY, shakeX, shakeY);
+            this._incrementalRepaint(buffer, camX, camY, shakeX, shakeY, zoom);
         }
 
         this._stats.lastRenderMs = performance.now() - startTime;
@@ -595,9 +687,9 @@ export class Renderer {
     /**
      * Presents only a known dirty cell set (typically from buffer.commit()).
      *
-     * Falls back to a full render when the camera or palette has moved since
-     * the cache was built, because dirty indices alone cannot repaint the
-     * exposed regions of a scrolled viewport.
+     * Falls back to a full render when the camera, zoom, or palette has
+     * changed since the cache was built, because dirty indices alone cannot
+     * repaint the exposed regions of a scrolled viewport.
      *
      * @param {ASCIIBuffer} buffer Virtual grid to present.
      * @param {RenderCamera} [camera={}] Camera state.
@@ -606,12 +698,18 @@ export class Renderer {
      * @returns {this}
      */
     renderDirty(buffer, camera = {}, dirtyCells = null) {
+        /* ---- Hybrid GPU fast path ------------------------------------- */
+        if (this._glDelegate) {
+            return this.render(buffer, camera);
+        }
+
         const camX = Math.round(camera.x || 0);
         const camY = Math.round(camera.y || 0);
         const shakeX = Math.round(camera.shakeX || 0);
         const shakeY = Math.round(camera.shakeY || 0);
+        const zoom = camera.zoom && camera.zoom > 0 ? camera.zoom : 1;
 
-        const key = this._buildCacheKey(buffer, camX, camY);
+        const key = this._buildCacheKey(buffer, camX, camY, zoom);
 
         if (key !== this._cacheKey) {
             return this.render(buffer, camera);
@@ -624,13 +722,13 @@ export class Renderer {
 
         const ctx = this._ctx;
         const cols = buffer.cols;
-        const rows = buffer.rows;
         const chars = buffer.charCodes;
         const fgColors = buffer.foregroundColors;
         const bgColors = buffer.backgroundColors;
 
         ctx.save();
         ctx.translate(shakeX, shakeY);
+        ctx.scale(zoom, zoom);
 
         for (let i = 0; i < cells.length; i += 1) {
             const index = cells[i];
@@ -640,7 +738,7 @@ export class Renderer {
             const row = (index / cols) | 0;
 
             const rect = this._cellRect(col, row, camX, camY);
-            if (!this._rectOverlapsViewport(rect)) continue;
+            if (!this._rectOverlapsViewport(rect, zoom)) continue;
 
             this._paintCell(
                 ctx,
@@ -669,37 +767,44 @@ export class Renderer {
      * fillStyle write plus one fillText() per visible glyph — the minimum
      * possible state churn for a cold frame.
      *
+     * Zoom is applied as a ctx.scale around the cell grid: cell rects are
+     * computed in world-minus-camera space (unscaled) and the transform
+     * magnifies them to the screen.
+     *
      * @param {ASCIIBuffer} buffer Source grid.
      * @param {number} camX Integer camera x.
      * @param {number} camY Integer camera y.
      * @param {number} shakeX Shake offset x.
      * @param {number} shakeY Shake offset y.
+     * @param {number} zoom Presentation zoom (1 = native).
      * @private
      */
-    _fullRepaint(buffer, camX, camY, shakeX, shakeY) {
+    _fullRepaint(buffer, camX, camY, shakeX, shakeY, zoom = 1) {
         const ctx = this._ctx;
 
         this._ensureScreenCache(buffer);
 
-        const range = this._visibleRange(buffer, camX, camY);
+        const range = this._visibleRange(buffer, camX, camY, zoom);
         const chars = buffer.charCodes;
         const fgColors = buffer.foregroundColors;
         const bgColors = buffer.backgroundColors;
 
         /* Shake can expose up to |shake| pixels of canvas beyond the normal
          * viewport on each axis; inflate the base clear to cover it. */
-        const margin = Math.max(Math.abs(shakeX), Math.abs(shakeY));
+        const margin = Math.max(Math.abs(shakeX), Math.abs(shakeY)) + 2;
 
         ctx.save();
         ctx.translate(shakeX, shakeY);
+        ctx.scale(zoom, zoom);
 
-        /* Base clear: one rectangle, one fill. */
+        /* Base clear: one rectangle, one fill. Scaled to cover the whole
+         * physical viewport regardless of zoom level. */
         ctx.fillStyle = this._cssColor(this._clearColor);
         ctx.fillRect(
             -margin,
             -margin,
-            this._cssWidth + margin * 2,
-            this._cssHeight + margin * 2
+            (this._cssWidth + margin * 2) / zoom,
+            (this._cssHeight + margin * 2) / zoom
         );
         this._stats.lastStyleChanges += 1;
 
@@ -794,20 +899,22 @@ export class Renderer {
      * @param {number} camY Integer camera y.
      * @param {number} shakeX Shake offset x.
      * @param {number} shakeY Shake offset y.
+     * @param {number} zoom Presentation zoom (1 = native).
      * @private
      */
-    _incrementalRepaint(buffer, camX, camY, shakeX, shakeY) {
+    _incrementalRepaint(buffer, camX, camY, shakeX, shakeY, zoom = 1) {
         const ctx = this._ctx;
 
         this._ensureScreenCache(buffer);
 
-        const range = this._visibleRange(buffer, camX, camY);
+        const range = this._visibleRange(buffer, camX, camY, zoom);
         const chars = buffer.charCodes;
         const fgColors = buffer.foregroundColors;
         const bgColors = buffer.backgroundColors;
 
         ctx.save();
         ctx.translate(shakeX, shakeY);
+        ctx.scale(zoom, zoom);
 
         for (let row = range.row0; row < range.row1; row += 1) {
             let index = row * buffer.cols + range.col0;
@@ -889,31 +996,41 @@ export class Renderer {
     /**
      * Computes the buffer cell range overlapping the viewport.
      *
+     * At zoom z the viewport covers cssWidth/z world pixels, so the range
+     * widens as the camera zooms out (macro overview) and narrows as it
+     * zooms in (close-up).
+     *
      * @param {ASCIIBuffer} buffer Source grid.
      * @param {number} camX Integer camera x.
      * @param {number} camY Integer camera y.
+     * @param {number} [zoom=1] Presentation zoom.
      * @returns {{col0: number, row0: number, col1: number, row1: number}}
      *   Half-open range, clamped to buffer dimensions.
      * @private
      */
-    _visibleRange(buffer, camX, camY) {
+    _visibleRange(buffer, camX, camY, zoom = 1) {
+        const viewW = this._cssWidth / zoom;
+        const viewH = this._cssHeight / zoom;
+
         const col0 = Math.max(0, Math.floor(camX / this._cellWidth));
         const row0 = Math.max(0, Math.floor(camY / this._cellHeight));
 
         const col1 = Math.min(
             buffer.cols,
-            Math.ceil((camX + this._cssWidth) / this._cellWidth)
+            Math.ceil((camX + viewW) / this._cellWidth)
         );
         const row1 = Math.min(
             buffer.rows,
-            Math.ceil((camY + this._cssHeight) / this._cellHeight)
+            Math.ceil((camY + viewH) / this._cellHeight)
         );
 
         return { col0, row0, col1, row1 };
     }
 
     /**
-     * Maps a grid cell to its integer screen rectangle.
+     * Maps a grid cell to its integer rectangle in world-minus-camera
+     * space. The ctx.scale(zoom) transform (installed by the repaint
+     * internals) magnifies this to the screen.
      *
      * Each edge is rounded independently from floating-point grid space,
      * which guarantees adjacent cells share exact pixel edges (no seams, no
@@ -938,15 +1055,20 @@ export class Renderer {
     /**
      * Tests whether a cell rectangle overlaps the viewport at all.
      * @param {{x: number, y: number, w: number, h: number}} rect
+     *   World-minus-camera rect (pre-zoom).
+     * @param {number} [zoom=1] Presentation zoom.
      * @returns {boolean}
      * @private
      */
-    _rectOverlapsViewport(rect) {
+    _rectOverlapsViewport(rect, zoom = 1) {
+        const viewW = this._cssWidth / zoom;
+        const viewH = this._cssHeight / zoom;
+
         return (
             rect.x + rect.w > 0 &&
             rect.y + rect.h > 0 &&
-            rect.x < this._cssWidth &&
-            rect.y < this._cssHeight
+            rect.x < viewW &&
+            rect.y < viewH
         );
     }
 
@@ -960,16 +1082,20 @@ export class Renderer {
      * The cache remains valid only while ALL of the following hold:
      *   - the integer camera offset is unchanged,
      *   - the buffer dimensions are unchanged,
-     *   - the palette generation is unchanged.
+     *   - the palette generation is unchanged,
+     *   - the zoom level is unchanged (quantized to 1/1000 so the glide
+     *     invalidates per perceptible step, not per float tick).
      *
      * @param {ASCIIBuffer} buffer Source grid.
      * @param {number} camX Integer camera x.
      * @param {number} camY Integer camera y.
+     * @param {number} [zoom=1] Presentation zoom.
      * @returns {string}
      * @private
      */
-    _buildCacheKey(buffer, camX, camY) {
-        return `${camX},${camY}|${buffer.cols}x${buffer.rows}|p${this._paletteGeneration}`;
+    _buildCacheKey(buffer, camX, camY, zoom = 1) {
+        return `${camX},${camY}|${buffer.cols}x${buffer.rows}` +
+            `|p${this._paletteGeneration}|z${zoom.toFixed(3)}`;
     }
 
     /**

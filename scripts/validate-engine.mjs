@@ -45,7 +45,7 @@ globalThis.cancelAnimationFrame = noop;
 const makeCtx = (canvas) => ({
     canvas, fillStyle: '', font: '', textBaseline: '', textAlign: '',
     setTransform: noop, save: noop, restore: noop, translate: noop, scale: noop,
-    fillRect: noop, fill: noop, fillText: noop,
+    clearRect: noop, fillRect: noop, fill: noop, fillText: noop,
     measureText: (t) => ({ width: String(t).length * 9.6 }),
 });
 const canvas = Object.assign(Object.create(globalThis.HTMLCanvasElement.prototype), {
@@ -582,6 +582,280 @@ const WebSocketRaw = (await import('ws')).default;
     await server.close();
     await sleep(400); // let close frames drain through the server
     check('server + client tear down cleanly', server.getPlayerCount() === 0);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   8. HYBRID WEBGL / THREE.JS PIPELINE — FontAtlas, GLDataPack, fluid zoom,
+      GPU presenter delegation + fallback contract (all headless, real modules)
+   ══════════════════════════════════════════════════════════════════════════ */
+
+section('8 · Hybrid WebGL pipeline (atlas · packers · fluid zoom · GPU presenter)');
+{
+    const { FontAtlas } = await import(`${ROOT}/src/engine/FontAtlas.js`);
+    const {
+        packCharPlane, packColorPlane, collectGlyphVocabulary,
+        decodeSlot, TEXEL_STRIDE
+    } = await import(`${ROOT}/src/engine/GLDataPack.js`);
+    const { Engine, MAX_LIGHTS } = await import(`${ROOT}/src/engine/Engine.js`);
+    const { InputManager } = await import(`${ROOT}/src/engine/InputManager.js`);
+    const { Renderer } = await import(`${ROOT}/src/engine/Renderer.js`);
+    const { Game } = await import(`${ROOT}/src/core/Game.js`);
+
+    /* ---- 8.1 FontAtlas: deterministic slot assignment ----------------- */
+    const atlasA = new FontAtlas();
+    const vocab = [0x23, 0x25, 0x54, 0x2E, 0x20, 0x00]; /* # % T . space NUL */
+    atlasA.ensure(vocab);
+
+    check('atlas reserves slot 0 for blanks (space + NUL)',
+        atlasA.slotFor(0x20) === 0 && atlasA.slotFor(0x00) === 0);
+    check('atlas assigns distinct non-zero slots to real glyphs',
+        atlasA.slotFor(0x23) > 0 &&
+        atlasA.slotFor(0x23) !== atlasA.slotFor(0x25) &&
+        atlasA.glyphCount === 4,
+        `slots: #=${atlasA.slotFor(0x23)} %=${atlasA.slotFor(0x25)}`);
+
+    const atlasB = new FontAtlas();
+    atlasB.ensure([...vocab].sort((a, b) => a - b));
+    check('slot assignment is deterministic across instances',
+        atlasA.slotFor(0x23) === atlasB.slotFor(0x23) &&
+        atlasA.slotFor(0x54) === atlasB.slotFor(0x54));
+
+    check('ensure() is a pixel no-op on an unchanged vocabulary',
+        atlasA.ensure(vocab) === false);
+
+    /* ---- 8.2 Atlas growth: page doubles, slots stay stable ------------ */
+    const stableSlot = atlasA.slotFor(0x23);
+    const growthCodes = [];
+    for (let cp = 0x100; growthCodes.length < 260; cp += 1) growthCodes.push(cp);
+    atlasA.ensure(growthCodes);
+
+    check('atlas grows to the next page past 256 glyphs',
+        atlasA.tilesX === 32 && atlasA.capacity === 1024,
+        `${atlasA.tilesX}x${atlasA.tilesX} tiles`);
+    check('existing slots remain stable across atlas growth',
+        atlasA.slotFor(0x23) === stableSlot && atlasA.slotFor(0x100 + 259) > 0);
+
+    const uv = atlasA.uvRect(stableSlot);
+    check('uv rects stay inside the atlas with half-texel insets',
+        uv.u0 >= 0 && uv.v0 >= 0 && uv.u1 <= 1 && uv.v1 <= 1 &&
+        uv.u1 > uv.u0 && uv.v1 > uv.v0);
+    const laid = FontAtlas.layoutSlot(257, 16);
+    check('slot layout is row-major (slot 257 → col 1, row 16)',
+        laid.col === 1 && laid.row === 16);
+
+    /* ---- 8.3 GLDataPack: byte-exact packing on a real buffer ---------- */
+    const packBuf = new ASCIIBuffer({
+        cols: 6, rows: 4, defaultFg: '#ffaa33', defaultBg: '#050811'
+    });
+    packBuf.setChar(1, 1, '#', '#ff5a5a', '#111111');
+    packBuf.setChar(2, 1, 'T', '#6dff7c', null);
+    packBuf.setChar(3, 1, '~', '#9ad7ff', '#001a33');
+    packBuf.setChar(4, 2, '@', '#ffd24a', '#222222');
+
+    const packAtlas = new FontAtlas();
+    const vocabOut = new Set();
+    const distinct = collectGlyphVocabulary(packBuf, vocabOut);
+    packAtlas.ensure(vocabOut);
+
+    const charBytes = new Uint8Array(packBuf.cellCount * TEXEL_STRIDE);
+    const fgBytes = new Uint8Array(packBuf.cellCount * TEXEL_STRIDE);
+    const bgBytes = new Uint8Array(packBuf.cellCount * TEXEL_STRIDE);
+    const waterCodes = new Set(['~'.codePointAt(0)]);
+
+    const packStats = packCharPlane(packBuf, packAtlas, charBytes, waterCodes);
+    packColorPlane(packBuf.foregroundColors, fgBytes);
+    packColorPlane(packBuf.backgroundColors, bgBytes);
+
+    const q = (x, y) => (y * packBuf.cols + x) * TEXEL_STRIDE;
+
+    check('vocabulary scan reports the distinct non-blank glyphs',
+        distinct === 4 && vocabOut.has(0x23) && !vocabOut.has(0x20));
+    check('char plane round-trips slot indices through the r/g channels',
+        decodeSlot(charBytes[q(1, 1)], charBytes[q(1, 1) + 1]) === packAtlas.slotFor(0x23) &&
+        decodeSlot(charBytes[q(4, 2)], charBytes[q(4, 2) + 1]) === packAtlas.slotFor(0x40));
+    check('water flag marks ONLY water glyphs',
+        charBytes[q(3, 1) + 2] === 255 &&
+        charBytes[q(1, 1) + 2] === 0 &&
+        charBytes[q(2, 1) + 2] === 0,
+        `${packStats.waterCells} water cell`);
+    check('blank cells pack as slot 0',
+        decodeSlot(charBytes[q(0, 0)], charBytes[q(0, 0) + 1]) === 0 &&
+        packStats.blankCells === packBuf.cellCount - 4);
+    check('color planes decompose packed RGBA in shader byte order',
+        fgBytes[q(1, 1)] === 0xff && fgBytes[q(1, 1) + 1] === 0x5a &&
+        fgBytes[q(1, 1) + 2] === 0x5a && fgBytes[q(1, 1) + 3] === 0xff &&
+        bgBytes[q(3, 1) + 2] === 0x33);
+
+    /* ---- 8.4 Camera fluid zoom math ------------------------------------ */
+    const zoomCam = new Camera({
+        viewportWidth: 800, viewportHeight: 600,
+        cellWidth: 9.6, cellHeight: 20,
+        mapCols: 200, mapRows: 80
+    });
+    zoomCam.setZoom(2.5, 400, 300);
+    for (let i = 0; i < 600; i += 1) zoomCam.update(1 / 60);
+
+    check('zoom glide converges on its target',
+        Math.abs(zoomCam.zoom - 2.5) < 1e-3 && !zoomCam.isZooming,
+        `zoom=${zoomCam.zoom.toFixed(4)}`);
+    check('effective viewport divides by zoom (world-space semantics)',
+        Math.abs(zoomCam.viewportWidth - 320) < 1e-9 &&
+        Math.abs(zoomCam.viewportHeight - 240) < 1e-9);
+
+    const roundTrip = zoomCam.worldToScreen(123, 456);
+    const roundBack = zoomCam.screenToWorld(roundTrip.x, roundTrip.y);
+    check('worldToScreen ∘ screenToWorld is the identity under zoom',
+        Math.abs(roundBack.x - 123) < 1e-6 && Math.abs(roundBack.y - 456) < 1e-6);
+
+    /* Cursor-anchored zoom: pin the world point under the pointer, glide
+     * the zoom out, and verify the pin holds THROUGH the glide (interior
+     * of the clamp band so bounds never override the anchor). */
+    const anchorCam = new Camera({
+        viewportWidth: 800, viewportHeight: 600,
+        cellWidth: 9.6, cellHeight: 20,
+        mapCols: 200, mapRows: 80
+    });
+    anchorCam.setTarget({ x: 1060, y: 900 });
+    for (let i = 0; i < 240; i += 1) anchorCam.update(1 / 60);
+
+    const pinScreen = { x: 500, y: 350 };
+    const pinWorld = anchorCam.screenToWorld(pinScreen.x, pinScreen.y);
+    anchorCam.setZoom(0.5, pinScreen.x, pinScreen.y);
+    for (let i = 0; i < 40; i += 1) anchorCam.update(1 / 60);
+
+    const pinAfter = anchorCam.worldToScreen(pinWorld.x, pinWorld.y);
+    check('cursor-anchored zoom keeps the pinned world point under the cursor',
+        Math.abs(pinAfter.x - pinScreen.x) < 0.5 &&
+        Math.abs(pinAfter.y - pinScreen.y) < 0.5,
+        `pin drifted (${pinAfter.x.toFixed(2)}, ${pinAfter.y.toFixed(2)})`);
+
+    for (let i = 0; i < 600; i += 1) anchorCam.update(1 / 60);
+    check('zoom anchor releases once the glide settles',
+        !anchorCam.isZooming && Math.abs(anchorCam.zoom - 0.5) < 1e-3);
+
+    /* ---- 8.5 Wheel→zoom input path ------------------------------------- */
+    const captured = {};
+    const fakeWindow = {
+        devicePixelRatio: 1,
+        addEventListener: (type, fn) => { (captured[type] ??= []).push(fn); },
+        removeEventListener: noop,
+        dispatchEvent: noop,
+    };
+    const zoomInput = new InputManager(fakeWindow, null, {});
+
+    let wheelPrevented = false;
+    const fireWheel = (deltaY, x, y) => captured['wheel'][0]({
+        deltaY, deltaX: 0, clientX: x, clientY: y,
+        preventDefault() { wheelPrevented = true; }
+    });
+
+    fireWheel(-240, 100, 80);
+    fireWheel(-240, 102, 82);
+    const drained = zoomInput.consumeWheelDelta();
+    check('wheel events accumulate, preventDefault, and drain with the pointer anchor',
+        drained !== null && drained.deltaY === -480 &&
+        drained.anchorX === 102 && drained.anchorY === 82 && wheelPrevented,
+        `Δy=${drained ? drained.deltaY : 'none'}`);
+    check('drained wheel state is empty on the next consume',
+        zoomInput.consumeWheelDelta() === null);
+
+    captured['keydown'][0]({
+        code: 'Equal', preventDefault: noop
+    });
+    zoomInput.update();
+    check('ZOOM_IN key action is bound in the default map',
+        zoomInput.isActionJustPressed('ZOOM_IN') &&
+        zoomInput.isActionJustPressed('ZOOM_OUT') === false);
+    zoomInput.destroy();
+
+    /* ---- 8.6 Renderer hybrid delegation + failure fallback ------------- */
+    const delegateCtx = makeCtx(canvas);
+    const delegateRenderer = new Renderer(delegateCtx, {
+        cssWidth: 640, cssHeight: 400, dpr: 1
+    });
+
+    let presentCalls = 0;
+    const fakeGL = {
+        isSupported: true,
+        present(buffer, camera) { presentCalls += 1; return true; }
+    };
+    delegateRenderer.setGLDelegate(fakeGL);
+    check('GL delegate installs transparent overlay mode',
+        delegateRenderer.isOverlay && delegateRenderer.glDelegate === fakeGL);
+
+    delegateRenderer.beginFrame();
+    delegateRenderer.render(packBuf, { x: 0, y: 0, zoom: 1.5 });
+    check('world renders forward to the GPU presenter (one present/frame)',
+        presentCalls === 1);
+
+    const boomGL = {
+        isSupported: true,
+        present() { throw new Error('WebGL context lost'); }
+    };
+    delegateRenderer.setGLDelegate(boomGL);
+    let revertedCleanly = false;
+    try {
+        delegateRenderer.render(packBuf, { x: 0, y: 0 });
+        revertedCleanly = delegateRenderer.glDelegate === null &&
+            !delegateRenderer.isOverlay;
+    } catch (error) {
+        revertedCleanly = false;
+    }
+    check('a GPU failure mid-frame reverts to Canvas 2D cleanly',
+        revertedCleanly);
+
+    /* ---- 8.7 Engine headless fallback contract -------------------------- */
+    const glCanvasShim = Object.assign(
+        Object.create(globalThis.HTMLCanvasElement.prototype),
+        {
+            width: 640, height: 400, style: {}, dataset: {},
+            addEventListener: noop, removeEventListener: noop,
+            getContext(type) {
+                return type === '2d' ? makeCtx(glCanvasShim) : null;
+            }
+        }
+    );
+
+    const engine = new Engine(glCanvasShim, { cellWidth: 9.6, cellHeight: 20 });
+    check('Engine degrades to unsupported without a GL context',
+        engine.isSupported === false && engine.backend === 'none');
+    check('unsupported Engine.present() is a safe boolean no-op',
+        engine.present(packBuf, { x: 0, y: 0 }) === false);
+
+    let stateApiSafe = true;
+    try {
+        engine.setFrameState({ flash: 1, rain: 0.5, glitch: 0.9, lights: [] });
+        engine.setWaterGlyphs(['~']);
+        engine.handleResize({ cssWidth: 800, cssHeight: 600, dpr: 2 });
+        engine.setCellMetrics(10, 21);
+        engine.getMetrics();
+        engine.destroy();
+    } catch (error) {
+        stateApiSafe = false;
+    }
+    check('unsupported Engine tolerates the full state API then destroys',
+        stateApiSafe);
+    check('shader light bank matches the documented cap', MAX_LIGHTS === 8);
+
+    /* ---- 8.8 Game-level hybrid boot (GL-less #glCanvas) ----------------- */
+    const hybridGame = new Game(canvas, { glCanvas: glCanvasShim, seed: 4242 });
+    check('Game boots with a GL-less #glCanvas and stays on Canvas 2D',
+        hybridGame._gl === null && hybridGame.getMetrics().presenter === 'canvas2d');
+
+    hybridGame._render(0.5);
+    check('Game renders a full frame with the GPU presenter absent',
+        hybridGame._renderer.getStats().frameCount > 0);
+    check('Game telemetry exposes zoom + presenter identity',
+        Number.isFinite(hybridGame.getMetrics().zoom) &&
+        hybridGame.getMetrics().presenter === 'canvas2d');
+
+    /* The wheel→camera zoom contract at Game scope: the same exponential
+     * factor the orchestrator applies, verified end-to-end on the camera. */
+    const beforeTarget = hybridGame._camera.targetZoom;
+    hybridGame._camera.zoomAt(Math.exp(240 * 0.0016), 320, 200);
+    check('Game camera accepts anchored zoom requests',
+        hybridGame._camera.targetZoom > beforeTarget);
+    hybridGame.destroy();
 }
 
 /* ══════════════════════════════════════════════════════════════════════════

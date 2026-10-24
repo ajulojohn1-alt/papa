@@ -12,6 +12,7 @@
     "validate": "node --import ./scripts/raw-hook.mjs scripts/validate-engine.mjs"
   },
   "dependencies": {
+    "three": "^0.186.1",
     "ws": "^8.16.0"
   },
   "devDependencies": {

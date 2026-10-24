@@ -149,6 +149,22 @@ body {
    which src/index.js multiplies by devicePixelRatio for the backing store.
    width/height here are CSS layout size only — the physical buffer is set
    in JS, so never set canvas.width/height attributes in this file. */
+/* WebGL layer of the hybrid stack (engine/Engine.js). Sits beneath the
+   2D canvas, full-bleed, painting the void color even before the first
+   GPU frame lands. Pointer events pass through — all input is captured
+   by #gameCanvas above it. The backing store is managed entirely by
+   Three.js (setPixelRatio + setSize); never touch it from CSS or DOM JS. */
+#glCanvas {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    background: var(--st-void);
+    pointer-events: none;
+    z-index: 0;
+}
+
 #gameCanvas {
     position: fixed;
     inset: 0;
@@ -159,8 +175,14 @@ body {
        that would otherwise create a sub-pixel scroll sliver. */
     display: block;
 
-    background: var(--st-void);
+    /* Transparent in hybrid mode so the WebGL composite shows through;
+       in pure-2D fallback the Renderer paints the void opaque itself, so
+       the page background (body: --st-void) backs the boot frames. */
+    background: transparent;
     cursor: crosshair;
+
+    /* Stacks above the GL layer. */
+    z-index: 1;
 
     /* Own the gesture space: no browser pinch-zoom, swipe-nav, or
        scroll-chaining over the play surface. InputManager owns all of it. */

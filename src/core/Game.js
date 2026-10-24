@@ -104,6 +104,7 @@
 
 import { GameLoop } from '../engine/GameLoop.js';
 import { Renderer } from '../engine/Renderer.js';
+import { Engine } from '../engine/Engine.js';
 import { InputManager } from '../engine/InputManager.js';
 import { ASCIIBuffer } from '../engine/ASCIIBuffer.js';
 import { WorldManager, WORLD, SHIFT_REASON } from '../worlds/WorldManager.js';
@@ -258,6 +259,41 @@ export class Game {
         /** @type {Renderer} */
         this._renderer = new Renderer(this._ctx, display);
 
+        /* 1b. Hybrid GPU presenter (engine/Engine.js): a Three.js
+         * full-screen quad composites the grid — zoom/pan, radial lights,
+         * water ripples, rain sheen, X-ray inversion, depletion glitch —
+         * in one draw call. WebGL is an ACCELERATOR, never a dependency:
+         * a missing #glCanvas or a failed probe leaves the battle-tested
+         * Canvas 2D presenter owning every pixel. */
+        /** @type {?Engine} */
+        this._gl = null;
+        const glCanvas = options.glCanvas ?? null;
+        if (glCanvas) {
+            try {
+                const engine = new Engine(glCanvas, {
+                    cellWidth: this._renderer.cellWidth,
+                    cellHeight: this._renderer.cellHeight
+                });
+                if (engine.isSupported) {
+                    engine.handleResize(display);
+                    this._gl = engine;
+                    this._renderer.setGLDelegate(engine);
+                    console.info(
+                        '%cYUCCA%c hybrid GPU presenter online (%s)',
+                        'color:#ff7700;font-weight:bold;',
+                        'color:#d7e3ee;',
+                        engine.backend
+                    );
+                } else {
+                    engine.destroy();
+                    console.info('[Game] WebGL unavailable — Canvas 2D presenter active.');
+                }
+            } catch (error) {
+                console.warn('[Game] GPU presenter failed to boot — Canvas 2D fallback:', error);
+                this._gl = null;
+            }
+        }
+
         /* 2. Input. */
         /** @type {InputManager} */
         this._input = new InputManager(window, canvas, options.input ?? {});
@@ -334,6 +370,13 @@ export class Game {
         /* ---- Terrain restamp registry (MapParser integration point) ---- */
         /** @type {Map<string, (buffer: ASCIIBuffer, camera: Object) => void>} */
         this._terrainStampers = new Map();
+
+        /* ---- GPU world-light registry ----------------------------------
+         * Static/registered radial lights (grove heart, juice-cart glow)
+         * layered under the automatic player aura each frame. Filtered by
+         * the active dimension during GL frame-state sync. */
+        /** @type {Array<{world: ?string, x: number, y: number, radius: number, color: string, intensity: number}>} */
+        this._worldLights = [];
 
         /* ---- Dialogue orchestration state ------------------------------ */
         /** @type {?Object} NPC currently in conversation. */
@@ -472,12 +515,48 @@ export class Game {
     }
 
     /**
-     * Attaches the WaterShader (reflection inversion + sine distortion).
+     * Attaches the WaterShader (reflection inversion + sine distortion)
+     * and snapshots its water-glyph vocabulary into the GPU presenter so
+     * the shader-side ripple pass can flag water cells.
      * @param {?Object} shader WaterShader or null.
      * @returns {this}
      */
     attachWaterShader(shader) {
         this._waterShader = shader;
+        if (shader && this._gl && typeof shader.getMetrics === 'function') {
+            const { waterGlyphs } = shader.getMetrics();
+            this._gl.setWaterGlyphs(waterGlyphs ?? []);
+        }
+        return this;
+    }
+
+    /**
+     * Registers a static radial light for the GPU presenter (grove heart,
+     * juice-cart glow, boss cores). Lights are world-scoped: they only
+     * present while their dimension is active. The player aura is added
+     * automatically and never needs registering.
+     *
+     * @param {Object} light Light descriptor.
+     * @param {number} light.x World x, CSS px.
+     * @param {number} light.y World y, CSS px.
+     * @param {number} [light.radius=140] Falloff radius, CSS px.
+     * @param {string} [light.color='#ffb46b'] CSS color.
+     * @param {number} [light.intensity=0.5] Peak intensity 0..1.
+     * @param {?string} [light.world=null] WORLD id, or null for all worlds.
+     * @returns {this}
+     */
+    registerWorldLight(light) {
+        if (!light || !Number.isFinite(light.x) || !Number.isFinite(light.y)) {
+            throw new TypeError('[Game] world light requires numeric x and y.');
+        }
+        this._worldLights.push({
+            world: light.world ?? null,
+            x: light.x,
+            y: light.y,
+            radius: Number.isFinite(light.radius) && light.radius > 0 ? light.radius : 140,
+            color: typeof light.color === 'string' ? light.color : '#ffb46b',
+            intensity: Number.isFinite(light.intensity) ? light.intensity : 0.5
+        });
         return this;
     }
 
@@ -591,8 +670,17 @@ export class Game {
         this._dialogue.destroy();
         this._weather.destroy();
         this._loadingScreen.destroy();
+        /* GPU teardown BEFORE releasing the delegate: the Renderer's
+         * setGLDelegate(null) repaints opaque 2D, which must never race a
+         * live GL context on the same composite. */
+        if (this._gl) {
+            this._gl.destroy();
+            this._gl = null;
+        }
+        this._renderer.setGLDelegate(null);
         this._interactableNPCs.clear();
         this._terrainStampers.clear();
+        this._worldLights.length = 0;
         this._listeners.clear();
     }
 
@@ -684,6 +772,12 @@ export class Game {
             this._state === GAME_STATE.DIALOGUE_ACTIVE;
         if (worldActive) {
             this._worlds.update(dt, null);
+        }
+
+        /* Fluid zoom (wheel + keys) is a presentation-layer control and
+         * stays live in every state that renders the world. */
+        if (worldActive || this._state === GAME_STATE.MAIN_MENU) {
+            this._handleZoomInput();
         }
 
         switch (this._state) {
@@ -856,6 +950,112 @@ export class Game {
     }
 
     /**
+     * Fluid zoom input: mouse wheel (cursor-anchored) plus keyboard
+     * fallbacks (centered). Wheel notches map through exp() so equal
+     * notches feel equal in BOTH directions — a linear ±0.25 would make
+     * zoom-in steps visually larger than zoom-out steps after rounding.
+     *
+     * Trackpads deliver many small deltas per gesture; exp(-δy·k) compounds
+     * them into one continuous glide, and the Camera's exponential damping
+     * animates the level change fluidly.
+     * @private
+     */
+    _handleZoomInput() {
+        if (!this._camera) return;
+
+        const wheel = this._input.consumeWheelDelta();
+        if (wheel && wheel.deltaY !== 0) {
+            const factor = Math.exp(-wheel.deltaY * 0.0016);
+            this._camera.zoomAt(factor, wheel.anchorX, wheel.anchorY);
+        }
+
+        const cx = this._camera.physicalWidth / 2;
+        const cy = this._camera.physicalHeight / 2;
+
+        if (this._input.isActionJustPressed('ZOOM_IN')) {
+            this._camera.zoomAt(1.25, cx, cy);
+        }
+        if (this._input.isActionJustPressed('ZOOM_OUT')) {
+            this._camera.zoomAt(0.8, cx, cy);
+        }
+        if (this._input.isActionJustPressed('ZOOM_RESET')) {
+            this._camera.setZoom(1, cx, cy);
+        }
+    }
+
+    /**
+     * Assembles and pushes the per-frame uniform state into the GPU
+     * presenter: weather (flash inversion, rain sheen, gloom), the orange
+     * economy (depletion glitch), dimension presentation (grayscale,
+     * ambient tint), the water ripple configuration, and the world-light
+     * stack (player aura + registered lights, dimension-filtered).
+     *
+     * Runs once per PRESENTED frame (not per tick) immediately before any
+     * world render so the shader state always matches this frame's
+     * simulation snapshot.
+     * @private
+     */
+    _syncGLFrameState() {
+        if (!this._gl) return;
+
+        const weatherMetrics = this._weather.getMetrics();
+        const rain = weatherMetrics.poolCapacity > 0
+            ? weatherMetrics.liveParticles / weatherMetrics.poolCapacity
+            : 0;
+
+        /* Orange depletion: the tear intensifies through the final quarter
+         * of the pool and saturates at zero — the collapse warning. */
+        const fraction = this._energy && Number.isFinite(this._energy.fraction)
+            ? this._energy.fraction
+            : 1;
+        const glitch = fraction <= 0.25 ? (0.25 - fraction) / 0.25 : 0;
+
+        const isDrab = this._worlds.isDrab();
+
+        /* World-light stack: aura first (always present), then registered
+         * lights for the ACTIVE dimension, capped by the engine at 8. */
+        const lights = [];
+        if (this._player && Number.isFinite(this._player.x)) {
+            lights.push({
+                x: this._player.x,
+                y: this._player.y,
+                radius: 150,
+                intensity: 0.34,
+                color: isDrab ? '#9ad7ff' : '#ffb46b'
+            });
+        }
+        const activeWorld = this._worlds.getActiveWorldId();
+        for (const light of this._worldLights) {
+            if (light.world !== null && light.world !== activeWorld) continue;
+            lights.push(light);
+        }
+
+        /* Water ripple configuration mirrors the CPU WaterShader so the
+         * GPU displacement breathes in phase with the CPU mirror rows. */
+        let water = null;
+        if (this._waterShader && typeof this._waterShader.getMetrics === 'function') {
+            const wm = this._waterShader.getMetrics();
+            water = {
+                frequency: wm.frequency,
+                amplitude: wm.amplitude,
+                speed: wm.speed
+            };
+        }
+
+        this._gl.setFrameState({
+            flash: this._weather.flashIntensity,
+            rain,
+            gloom: weatherMetrics.gloom,
+            glitch,
+            grayscale: this._renderer.grayscale ? 1 : 0,
+            tint: isDrab ? '#a9b8c6' : '#ffb46b',
+            tintStrength: isDrab ? 0.16 : 0.10,
+            water,
+            lights
+        });
+    }
+
+    /**
      * Searches registered NPCs for one that can be spoken to and opens a
      * conversation with the first match.
      * @private
@@ -988,6 +1188,9 @@ export class Game {
     _render(alpha) {
         const r = this._renderer;
         r.beginFrame();
+        /* GPU uniform state must land BEFORE any world/loading present so
+         * the shader reads this frame's simulation snapshot. */
+        this._syncGLFrameState();
         if (this._state === GAME_STATE.LOADING ||
             this._state === GAME_STATE.MAIN_MENU) {
             /* The vibrant boot portrait is the interactive entry point:
@@ -1137,6 +1340,10 @@ export class Game {
         this._camera.setCellMetrics(this._renderer.cellWidth, this._renderer.cellHeight);
         this._weather.setCellMetrics(this._renderer.cellWidth, this._renderer.cellHeight);
         this._loadingScreen.handleResize(displayInfo);
+        if (this._gl) {
+            this._gl.handleResize(displayInfo);
+            this._gl.setCellMetrics(this._renderer.cellWidth, this._renderer.cellHeight);
+        }
         this._renderer.invalidate();
         return this;
     }
@@ -1210,6 +1417,9 @@ export class Game {
             simTime: this._simTime,
             world: this._worlds.getActiveWorldId(),
             transitioning: this._worlds.isTransitioning(),
+            zoom: this._camera.zoom,
+            presenter: this._gl ? 'webgl' : 'canvas2d',
+            gl: this._gl ? this._gl.getMetrics() : null,
             loop: this._loop.getMetrics(),
             renderer: this._renderer.getStats(),
             weather: this._weather.getMetrics(),

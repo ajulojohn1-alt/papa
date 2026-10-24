@@ -374,19 +374,26 @@ async function boot() {
         );
     }
 
-    const ctx = canvas.getContext('2d', { alpha: false });
+    const ctx = canvas.getContext('2d', { alpha: true });
     if (!ctx) {
         throw new Error(
             'Your browser could not create a Canvas 2D context. ' +
             'Hardware acceleration may be disabled.'
         );
     }
+    /* alpha:true is REQUIRED by the hybrid stack: when the GPU presenter
+     * is live this canvas becomes a transparent HUD overlay above the
+     * WebGL layer. In pure-2D fallback the Renderer paints every pixel
+     * opaque itself, so transparency costs nothing visually. */
 
     // ---- Retina backing store before the Game measures the canvas -----
     fitCanvasToDisplay();
 
     // ---- Master orchestrator -----------------------------------------
-    game = new Game(canvas, readBootOptions());
+    // #glCanvas is optional: a missing element or a failed WebGL probe
+    // keeps the battle-tested Canvas 2D presenter as the sole surface.
+    const glCanvas = document.getElementById('glCanvas');
+    game = new Game(canvas, { ...readBootOptions(), glCanvas: glCanvas ?? null });
 
     // ---- Dimension content: maps, player, energy, water, NPCs --------
     // Modules that land through the Game's typed attach() seams. Never
