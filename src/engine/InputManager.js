@@ -3,7 +3,7 @@
  * @module engine/InputManager
  *
  * @description
- * Input capture, state tracking, and action mapping for "A Stitch in Time".
+ * Input capture, state tracking, and action mapping for "YUCCA".
  *
  * InputManager is the single source of truth for player intent. It converts
  * raw browser DOM events into stable, pollable game state that systems query

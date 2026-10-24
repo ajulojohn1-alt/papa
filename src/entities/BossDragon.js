@@ -3,7 +3,7 @@
  * @module entities/BossDragon
  * @description
  * The Temporal / Clockwork Dragon — the endgame bullet-hell boss of
- * "A Stitch in Time". A large multi-cell ASCII dragon whose palette and
+ * "YUCCA". A large multi-cell ASCII dragon whose palette and
  * accent colors shift as it descends through three HP-gated phases, each
  * with its own attack schedule built entirely from trigonometric pattern
  * generators:

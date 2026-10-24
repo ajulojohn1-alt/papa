@@ -3,7 +3,7 @@
  * @module core/Game
  * @description
  * Master engine orchestrator and application entry point for
- * "A Stitch in Time".
+ * "YUCCA".
  *
  * Game owns the canvas, constructs every subsystem in dependency order,
  * binds the fixed-timestep loop, runs the global application state
@@ -111,6 +111,7 @@ import { WeatherSystem } from '../worlds/WeatherSystem.js';
 import { UIManager } from '../ui/UIManager.js';
 import { HUD } from '../ui/HUD.js';
 import { DialogueBox } from '../ui/DialogueBox.js';
+import { LoadingScreen } from '../ui/LoadingScreen.js';
 import { AudioEngine } from '../audio/AudioEngine.js';
 import { SoundEffects, SFX_NAME } from '../audio/SoundEffects.js';
 
@@ -310,6 +311,14 @@ export class Game {
         /** @type {DialogueBox} */
         this._dialogue = new DialogueBox(this._renderer, {
             charsPerSecond: 55
+        });
+
+        /* 11. Boot portrait: the vibrant YUCCA loading screen (ambient
+         * spore drift + embroidered poncho) presented during LOADING and
+         * MAIN_MENU. Interactive entry: SPACE once the session is ready. */
+        /** @type {LoadingScreen} */
+        this._loadingScreen = new LoadingScreen(this._renderer, {
+            seed: options.seed
         });
 
         /* ---- Injectable gameplay subsystem slots (attach seams) -------- */
@@ -546,7 +555,9 @@ export class Game {
      * @returns {this}
      */
     startGame() {
-        if (this._state !== GAME_STATE.MAIN_MENU && this._state !== GAME_STATE.GAME_OVER) {
+        if (this._state !== GAME_STATE.MAIN_MENU &&
+            this._state !== GAME_STATE.GAME_OVER &&
+            this._state !== GAME_STATE.LOADING) {
             return this;
         }
         if (this._player && typeof this._player.setControlEnabled === 'function') {
@@ -579,6 +590,7 @@ export class Game {
         this._hud.destroy();
         this._dialogue.destroy();
         this._weather.destroy();
+        this._loadingScreen.destroy();
         this._interactableNPCs.clear();
         this._terrainStampers.clear();
         this._listeners.clear();
@@ -675,7 +687,11 @@ export class Game {
         }
 
         switch (this._state) {
+            case GAME_STATE.LOADING:
+                this._updateLoadingScreen(dt);
+                break;
             case GAME_STATE.MAIN_MENU:
+                this._updateLoadingScreen(dt);
                 this._updateMainMenu();
                 break;
             case GAME_STATE.PLAYING:
@@ -691,7 +707,7 @@ export class Game {
                 this._updateGameOver();
                 break;
             default:
-                break; // LOADING is driven by start()'s async boot.
+                break;
         }
 
         /* Ambient weather + water shader advance AFTER entity updates so a
@@ -703,6 +719,21 @@ export class Game {
             if (this._waterShader && typeof this._waterShader.update === 'function') {
                 this._waterShader.update(dt);
             }
+        }
+    }
+
+    /**
+     * Boot-portrait tick: advances the loading screen's ambient spore
+     * drift and lets a ready session enter the world on ACTION.
+     * @param {number} dt Fixed timestep, seconds.
+     * @private
+     */
+    _updateLoadingScreen(dt) {
+        this._loadingScreen.update(dt);
+        if (this._loadingScreen.isReady &&
+            (this._input.isActionJustPressed('ACTION') ||
+             this._input.isActionJustPressed('INTERACT'))) {
+            this.startGame();
         }
     }
 
@@ -957,11 +988,11 @@ export class Game {
     _render(alpha) {
         const r = this._renderer;
         r.beginFrame();
-        if (this._state === GAME_STATE.LOADING) {
-            this._renderLoading(r);
-        } else if (this._state === GAME_STATE.MAIN_MENU) {
-            this._presentWorld(r, alpha);
-            this._renderMainMenu(r);
+        if (this._state === GAME_STATE.LOADING ||
+            this._state === GAME_STATE.MAIN_MENU) {
+            /* The vibrant boot portrait is the interactive entry point:
+             * ambient spore drift, embroidered poncho, session status. */
+            this._loadingScreen.render(r);
         } else {
             this._presentWorld(r, alpha);
             this._hud.render(alpha);
@@ -1054,31 +1085,6 @@ export class Game {
     }
 
     /**
-     * Loading screen.
-     * @param {Renderer} r Engine renderer.
-     * @private
-     */
-    _renderLoading(r) {
-        const dots = '.'.repeat(1 + (Math.floor(this._simTime * 3) % 3));
-        this._centeredLine(r, 'A STITCH IN TIME', 0.4, '#ff7700');
-        this._centeredLine(r, `loading${dots}`, 0.52, '#d7e3ee');
-    }
-
-    /**
-     * Main-menu overlay.
-     * @param {Renderer} r Engine renderer.
-     * @private
-     */
-    _renderMainMenu(r) {
-        this._centeredLine(r, 'A STITCH IN TIME', 0.32, '#ff7700');
-        this._centeredLine(r, 'the hour is fraying', 0.42, '#8a97a6');
-        const blink = Math.floor(this._simTime * 1.5) % 2 === 0;
-        if (blink) {
-            this._centeredLine(r, '[ SPACE ] begin', 0.58, '#ffe9c4');
-        }
-    }
-
-    /**
      * Pause overlay.
      * @param {Renderer} r Engine renderer.
      * @private
@@ -1130,6 +1136,7 @@ export class Game {
         this._camera.setViewport(displayInfo.cssWidth, displayInfo.cssHeight);
         this._camera.setCellMetrics(this._renderer.cellWidth, this._renderer.cellHeight);
         this._weather.setCellMetrics(this._renderer.cellWidth, this._renderer.cellHeight);
+        this._loadingScreen.handleResize(displayInfo);
         this._renderer.invalidate();
         return this;
     }

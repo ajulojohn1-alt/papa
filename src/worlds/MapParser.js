@@ -2,7 +2,7 @@
  * @file src/worlds/MapParser.js
  * @module worlds/MapParser
  * @description
- * Map ingestion pipeline for "A Stitch in Time".
+ * Map ingestion pipeline for "YUCCA".
  * MapParser converts raw ASCII text matrices (multi-line strings or string
  * arrays) and JSON grid documents into runtime-ready GameMap objects that
  * the collision, rendering, quest, and WorldManager subsystems consume

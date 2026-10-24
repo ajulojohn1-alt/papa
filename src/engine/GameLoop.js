@@ -3,7 +3,7 @@
  * @module engine/GameLoop
  *
  * @description
- * Master timing architecture for "A Stitch in Time".
+ * Master timing architecture for "YUCCA".
  *
  * This module decouples SIMULATION from PRESENTATION. Gameplay (movement,
  * orange-energy decay, projectile integration, boss phase machines, collision

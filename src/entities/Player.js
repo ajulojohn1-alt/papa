@@ -2,7 +2,7 @@
  * @file src/entities/Player.js
  * @module entities/Player
  * @description
- * The player avatar for "A Stitch in Time".
+ * The player avatar for "YUCCA".
  * Player extends Entity with input-driven 8-way movement, sprint/dodge
  * maneuvers gated by the orange energy resource, dual-world visual form
  * switching, and a multi-cell ASCII sprite renderer. It is the only
@@ -354,6 +354,8 @@ export class Player extends Entity {
         this._moving = false;
         /** @type {number} Walk-cycle phase in steps. */
         this._walkPhase = 0;
+        /** @type {number} Last stride boundary emitted as a footstep. */
+        this._lastStepPhase = 0;
 
         /* ---- Dodge state ---------------------------------------------- */
         /** @type {number} Remaining committed dodge time, seconds. */
@@ -653,6 +655,27 @@ export class Player extends Entity {
             this._moveState = MOVE_STATE.WALK;
         } else {
             this._moveState = MOVE_STATE.IDLE;
+        }
+
+        /* Footstep events: one per completed stride — every two walkPhase
+         * units (one unit ≈ one row-pitch of travel), so cadence is
+         * distance-correct and sprints step faster by construction. The
+         * audio layer maps world + sprint context onto terrain-tuned
+         * voices (grass soft, asphalt hard). */
+        if (this._moving && !this.isDodging) {
+            const strideIndex = Math.floor(this._walkPhase / 2);
+            if (strideIndex !== this._lastStepPhase) {
+                this._lastStepPhase = strideIndex;
+                this._dispatch('footstep', {
+                    id: this.id,
+                    sprint: this._sprinting,
+                    world: this._world,
+                    x: this._x,
+                    y: this._y
+                });
+            }
+        } else {
+            this._lastStepPhase = Math.floor(this._walkPhase / 2);
         }
 
         /* Low-energy crossing detector: fire exactly once per dip. */

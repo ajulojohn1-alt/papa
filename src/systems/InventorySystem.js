@@ -2,7 +2,7 @@
  * @file src/systems/InventorySystem.js
  * @module systems/InventorySystem
  * @description
- * Item storage, equipment, and usage arbitration for "A Stitch in Time".
+ * Item storage, equipment, and usage arbitration for "YUCCA".
  * InventorySystem is the single authority on what the player carries, what
  * they wear, and what those things do. It is a pure data + rules system:
  * it owns no entities, draws nothing, and never mutates the player. It

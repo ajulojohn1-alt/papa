@@ -2,7 +2,7 @@
  * @file src/audio/SoundEffects.js
  * @module audio/SoundEffects
  * @description
- * Procedural sound-effect library and trigger system for "A Stitch in Time".
+ * Procedural sound-effect library and trigger system for "YUCCA".
  *
  * SoundEffects is the GAME-FACING half of the zero-asset audio architecture.
  * AudioEngine owns the AudioContext, the bus hierarchy, the dual-world

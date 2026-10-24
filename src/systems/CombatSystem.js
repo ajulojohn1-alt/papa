@@ -2,7 +2,7 @@
  * @file src/systems/CombatSystem.js
  * @module systems/CombatSystem
  * @description
- * The combat arbiter for "A Stitch in Time". CombatSystem owns every rule
+ * The combat arbiter for "YUCCA". CombatSystem owns every rule
  * of engagement: who can hit whom, how hard, how often, and what happens
  * on contact. It is a pure authority — it holds no entity classes, draws
  * nothing itself, and mutates nothing it does not own. Instead it computes

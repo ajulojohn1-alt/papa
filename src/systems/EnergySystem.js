@@ -2,7 +2,7 @@
  * @file src/systems/EnergySystem.js
  * @module systems/EnergySystem
  * @description
- * The Orange Energy economy for "A Stitch in Time" — the reality anchor
+ * The Orange Energy economy for "YUCCA" — the reality anchor
  * that binds the two dimensions together.
  *
  * EnergySystem is the SINGLE OWNER of the orange reserve. Every drain and

@@ -2,7 +2,7 @@
  * @file src/audio/AudioEngine.js
  * @module audio/AudioEngine
  * @description
- * Procedural audio engine for "A Stitch in Time".
+ * Procedural audio engine for "YUCCA".
  *
  * AudioEngine is the game's ONLY sound source: every footstep, thunder
  * clap, typewriter tick, bullet whoosh, and both dimension soundtracks is

@@ -3,7 +3,7 @@
  * @module engine/Camera
  *
  * @description
- * Viewport controller for "A Stitch in Time".
+ * Viewport controller for "YUCCA".
  *
  * The Camera owns the mapping between WORLD space (the full ASCII map,
  * measured in CSS pixels) and SCREEN space (the player's viewport). It

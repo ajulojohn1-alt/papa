@@ -2,7 +2,7 @@
  * @file src/entities/NPC.js
  * @module entities/NPC
  * @description
- * Non-player characters for "A Stitch in Time".
+ * Non-player characters for "YUCCA".
  * NPC extends Entity with three responsibilities: a proximity interaction
  * loop that detects the player and advertises itself, a stateful dialogue
  * tree engine with typewriter pacing, branching choices, and conditional

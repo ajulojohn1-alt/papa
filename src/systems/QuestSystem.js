@@ -3,7 +3,7 @@
  * @module systems/QuestSystem
  * @description
  * Quest tracking, objective progression, state machines, and reward
- * distribution for "A Stitch in Time". QuestSystem is the single authority
+ * distribution for "YUCCA". QuestSystem is the single authority
  * on what the player has been asked to do, how far along they are, and what
  * they earn for finishing. It is a pure data + rules system: it owns no
  * entities and draws nothing. It advances objective counters from game

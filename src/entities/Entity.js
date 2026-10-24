@@ -2,7 +2,7 @@
  * @file src/entities/Entity.js
  * @module entities/Entity
  * @description
- * Foundational physical entity for "A Stitch in Time".
+ * Foundational physical entity for "YUCCA".
  * Entity is the concrete base class for every object that occupies world
  * space: players, NPCs, monsters, projectiles, pickups, doors, and quest
  * markers. It is deliberately NOT a stub: an out-of-the-box Entity is a

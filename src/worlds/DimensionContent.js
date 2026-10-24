@@ -27,58 +27,15 @@
  */
 
 import { WORLD, SHIFT_REASON } from './WorldManager.js';
-import { MapParser } from './MapParser.js';
+import { loadDimensionMaps } from './MapParser_2.js';
+import { acousticClassForTile, TERRAIN_ACOUSTIC } from './DimensionTiles.js';
 import { WaterShader } from './WaterShader.js';
 import { EnergySystem } from '../systems/EnergySystem.js';
 import { Player } from '../entities/Player.js';
 import { NPC } from '../entities/NPC.js';
+import { SFX_NAME } from '../audio/SoundEffects.js';
 import dreamMapSource from '../../assets/data/dream-grove.txt?raw';
 import drabMapSource from '../../assets/data/drab-streets.txt?raw';
-
-/* ══════════════════════════════════════════════════════════════════════════
-   EXTENDED TILE REGISTRY
-   ══════════════════════════════════════════════════════════════════════════ */
-
-/**
- * Dimension-specific glyphs layered over MapParser's default registry
- * via parser.registerTiles() (blueprint §3.1 density mapping: tree
- * trunks and rock are high-density, unwalkable, opaque).
- * @type {Object<string, Object>}
- */
-const EXTENDED_TILES = Object.freeze({
-    T: Object.freeze({
-        name: 'Grove Tree',
-        isWalkable: false,
-        isTransparent: false,
-        renderColor: '#3e8e46',
-        backgroundHighlight: '#0a1a0c',
-        interactionId: null
-    }),
-    M: Object.freeze({
-        name: 'Mossy Rock',
-        isWalkable: false,
-        isTransparent: false,
-        renderColor: '#8a8f7a',
-        backgroundHighlight: '#101208',
-        interactionId: null
-    }),
-    '#': Object.freeze({
-        name: 'Concrete Wall',
-        isWalkable: false,
-        isTransparent: false,
-        renderColor: '#9aa3ad',
-        backgroundHighlight: '#14161a',
-        interactionId: null
-    }),
-    J: Object.freeze({
-        name: 'Orange Juice Cart',
-        isWalkable: false,
-        isTransparent: true,
-        renderColor: '#ff7700',
-        backgroundHighlight: '#241505',
-        interactionId: 'JUICE_CART'
-    })
-});
 
 /* ══════════════════════════════════════════════════════════════════════════
    NPC DIALOGUE (schema: {start, nodes: {id: {text[], next?, choices?[]}}})
@@ -156,27 +113,30 @@ const VENDOR_DIALOGUE = Object.freeze({
  * Game orchestrator. Safe to call exactly once, after the Game exists
  * and before game.start().
  *
+ * Map ingestion runs through MapParser_2 (schema verification + deterministic
+ * fallback generation), so this NEVER returns null for map reasons — a
+ * corrupted document degrades to a playable procedural dimension.
+ *
  * @param {import('../core/Game.js').Game} game Live orchestrator.
- * @returns {?Object} Content handles ({player, energy, water, npcs}) or
- *   null when the maps could not be parsed (engine continues on void grids).
+ * @returns {?Object} Content handles ({player, energy, water, npcs, maps}).
  */
 export function loadDimensionContent(game) {
-    /* ---- Parse both dimension documents ------------------------------ */
-    const parser = new MapParser({ strict: true });
-    parser.registerTiles(EXTENDED_TILES);
-
-    let dreamMap;
-    let drabMap;
-    try {
-        dreamMap = parser.parse(dreamMapSource, { name: 'dream_grove' });
-        drabMap = parser.parse(drabMapSource, { name: 'drab_streets' });
-    } catch (error) {
-        console.error('[DimensionContent] Map parse failed; running on void grids:', error);
-        return null;
-    }
-    for (const warning of [...dreamMap.warnings, ...drabMap.warnings]) {
+    /* ---- Parse both dimension documents (hardened pipeline) ----------- */
+    const { maps, warnings, usedFallback } = loadDimensionMaps({
+        sources: {
+            [WORLD.DREAM]: dreamMapSource,
+            [WORLD.DRAB]: drabMapSource
+        },
+        names: {
+            [WORLD.DREAM]: 'dream_grove',
+            [WORLD.DRAB]: 'drab_streets'
+        }
+    });
+    for (const warning of warnings) {
         console.warn('[DimensionContent]', warning);
     }
+    const dreamMap = maps[WORLD.DREAM];
+    const drabMap = maps[WORLD.DRAB];
 
     const worlds = game._worlds;
     const renderer = game._renderer;
@@ -222,13 +182,40 @@ export function loadDimensionContent(game) {
     });
     game.attachPlayer(player);
 
-    /* ---- Interactable NPCs (gated per dimension) ---------------------- */
+    /* ---- Interactable NPCs (spots derived from map data, fallback-safe) */
     const centerOf = (col, row) => ({ x: (col + 0.5) * cellW, y: (row + 0.5) * cellH });
-    const groveSpot = centerOf(22, 12);
-    const vendorSpot = centerOf(47, 18);
+
+    /** Grove keeper at the map's NPC spawn, or beside the player spawn. */
+    const groveNpcSpawn = dreamMap.getSpawnsByType('NPC')[0]
+        ?? { x: Math.min(dreamMap.cols - 2, spawn.x + 2), y: spawn.y };
+
+    /**
+     * Vendor stands beside the Juice Cart tile when the map ships one;
+     * otherwise next to the player spawn. Always verified walkable so a
+     * deterministic fallback map never embeds her in a wall.
+     */
+    const vendorSpotCell = (() => {
+        const cartCell = drabMap.findInteractionCells('JUICE_CART')[0];
+        const anchors = [];
+        if (cartCell) {
+            anchors.push(
+                { x: cartCell.x + 1, y: cartCell.y },
+                { x: cartCell.x - 1, y: cartCell.y },
+                { x: cartCell.x, y: cartCell.y + 1 },
+                { x: cartCell.x, y: cartCell.y - 1 }
+            );
+        }
+        const drabSpawn = drabMap.getPlayerSpawn() ?? { x: 1, y: 1 };
+        anchors.push(
+            { x: drabSpawn.x + 1, y: drabSpawn.y },
+            { x: drabSpawn.x, y: drabSpawn.y + 1 },
+            { x: drabSpawn.x, y: drabSpawn.y }
+        );
+        return anchors.find((c) => drabMap.isWalkableAt(c.x, c.y)) ?? drabSpawn;
+    })();
 
     const ira = new NPC({
-        ...groveSpot,
+        ...centerOf(groveNpcSpawn.x, groveNpcSpawn.y),
         name: 'Ira',
         char: 'I',
         fgColor: '#ffd27f',
@@ -236,7 +223,7 @@ export function loadDimensionContent(game) {
         dialogue: IRA_DIALOGUE
     });
     const vendor = new NPC({
-        ...vendorSpot,
+        ...centerOf(vendorSpotCell.x, vendorSpotCell.y),
         name: 'Juice Vendor',
         char: 'V',
         fgColor: '#ff7700',
@@ -249,9 +236,9 @@ export function loadDimensionContent(game) {
     /**
      * Entity presenter adapter. The Player is NOT updated here — Game's
      * _updatePlaying owns player.handleInput/update directly — this seam
-     * only advances and presents the NPCs of the ACTIVE dimension, so the
-     * mender never flickers into the gray city and the vendor never
-     * haunts the grove.
+     * only advances and presents the NPCs of the ACTIVE dimension plus
+     * the network's same-dimension remote ghosts, so the mender never
+     * flickers into the gray city and the vendor never haunts the grove.
      */
     const npcsByWorld = {
         [WORLD.DREAM]: [ira],
@@ -268,7 +255,35 @@ export function loadDimensionContent(game) {
             for (const npc of npcsByWorld[worlds.getActiveWorldId()] ?? []) {
                 npc.render(buffer, camera, alpha);
             }
+            /* Remote players, interpolated by the NetworkManager. */
+            const network = game._network;
+            if (network && typeof network.getGhosts === 'function') {
+                for (const ghost of network.getGhosts()) {
+                    ghost.render(buffer, camera, alpha);
+                }
+            }
         }
+    });
+
+    /* ---- Terrain-aware footsteps: every stride event maps through the
+     * active map's tile registry into an acoustically tuned SFX voice
+     * (soft grove ground vs. hard city asphalt; sprint pushes gain). ---- */
+    player.addEventListener('footstep', (detail) => {
+        const map = worlds.isDrab() ? drabMap : dreamMap;
+        const col = Math.floor(detail.x / cellW);
+        const row = Math.floor(detail.y / cellH);
+        const snap = map.isInBounds(col, row) ? map.getTileAt(col, row) : null;
+        const acoustic = acousticClassForTile(snap?.tile?.name ?? 'Concrete Wall');
+
+        game._sfx.play(SFX_NAME.FOOTSTEP, {
+            gainScale: detail.sprint ? 1.15 : (acoustic === TERRAIN_ACOUSTIC.SOFT ? 0.7 : 0.95),
+            filter: acoustic === TERRAIN_ACOUSTIC.SOFT
+                ? { type: 'lowpass', frequency: 900 }
+                : (acoustic === TERRAIN_ACOUSTIC.HOLLOW
+                    ? { type: 'highpass', frequency: 500 }
+                    : null),
+            pan: null
+        });
     });
 
     /* ---- Juice Cart transaction: close the vendor's conversation in the
@@ -282,12 +297,23 @@ export function loadDimensionContent(game) {
     });
 
     /* ---- Softlock guard: a juice purchase that lands while a transition
-     * is still settling gets its 'restored' shift rejected by
-     * WorldManager's in-flight guard (a deliberate engine rule). Re-issue
-     * the request once the world settles so a refilled player is never
-     * stranded in the Drab World with a full orange reserve. ------------ */
+     * is still settling gets its 'restored' fade-home REJECTED by
+     * WorldManager's in-flight guard (a deliberate engine rule). The
+     * guard arms ONLY in that case — when the fade-home actually started,
+     * or no shift was needed, it stays disarmed so intentional visits to
+     * the Drab World (DIMENSION_FOCUS toggle) are never yanked back. --- */
+    let restoreShiftPending = false;
+    energy.addEventListener('restored', () => {
+        const status = worlds.getTransitionStatus();
+        restoreShiftPending = !(status.active && status.to === WORLD.DREAM);
+    });
     worlds.on('transitioncomplete', () => {
-        if (worlds.isDrab() && !energy.isDepleted) {
+        if (worlds.isDream()) {
+            restoreShiftPending = false;
+            return;
+        }
+        if (restoreShiftPending && worlds.isDrab() && !energy.isDepleted) {
+            restoreShiftPending = false;
             game.requestDimensionShift(WORLD.DREAM, SHIFT_REASON.JUICE_CONSUMED);
         }
     });
@@ -295,10 +321,18 @@ export function loadDimensionContent(game) {
     console.info(
         `[DimensionContent] Loaded ${dreamMap.name} (${dreamMap.cols}x${dreamMap.rows}) ` +
         `and ${drabMap.name} (${drabMap.cols}x${drabMap.rows}); ` +
-        `player at (${spawn.x},${spawn.y}) in ${initialWorld}.`
+        `player at (${spawn.x},${spawn.y}) in ${initialWorld}` +
+        `${usedFallback.length ? ` [fallback: ${usedFallback.join(', ')}]` : ''}.`
     );
 
-    return { player, energy, water, npcs: { ira, vendor }, maps: { dreamMap, drabMap } };
+    return {
+        player,
+        energy,
+        water,
+        npcs: { ira, vendor },
+        maps: { dreamMap, drabMap },
+        usedFallback
+    };
 }
 
 export default loadDimensionContent;

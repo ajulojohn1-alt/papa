@@ -3,7 +3,7 @@
  * @module ui/DialogueBox
  * @description
  * Typewriter dialogue presentation and conversation input authority for
- * "A Stitch in Time".
+ * "YUCCA".
  *
  * DialogueBox is the screen-space UI face of every NPC conversation: it
  * frames the speaker in ASCII, streams dialogue text character by

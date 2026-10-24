@@ -3,7 +3,7 @@
  * @module engine/Renderer
  *
  * @description
- * Canvas 2D blitting engine for "A Stitch in Time".
+ * Canvas 2D blitting engine for "YUCCA".
  *
  * The Renderer is the only subsystem allowed to touch the CanvasRenderingContext2D.
  * It reads virtual grid state from an ASCIIBuffer and presents it through a

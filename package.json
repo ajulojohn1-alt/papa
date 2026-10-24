@@ -1,13 +1,15 @@
 {
-  "name": "a-stitch-in-time",
+  "name": "yucca",
   "version": "1.0.0",
-  "description": "An ES6+ modular ASCII MMORPG with dual-world mechanics and bullet-hell combat.",
+  "description": "YUCCA — an online-multiplayer ES6+ ASCII MMORPG engine with dual-world mechanics, deterministic weather, and bullet-hell combat.",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "server": "node server/index.js"
+    "start:server": "node server.js",
+    "start": "node server.js",
+    "validate": "node --import ./scripts/raw-hook.mjs scripts/validate-engine.mjs"
   },
   "dependencies": {
     "ws": "^8.16.0"

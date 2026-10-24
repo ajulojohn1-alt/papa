@@ -2,7 +2,7 @@
  * @file src/worlds/WaterShader.js
  * @module worlds/WaterShader
  * @description
- * Real-time water reflection shader for "A Stitch in Time".
+ * Real-time water reflection shader for "YUCCA".
  * WaterShader reads the terrain + entity content that sits ABOVE every
  * lake/river tile, mirrors it across the water surface, distorts it with
  * animated sine waves, tints it toward a deep-water palette, and injects

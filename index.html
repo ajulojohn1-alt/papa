@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <!-- ═══════════════════════════════════════════════════════════════════
-         A STITCH IN TIME — Application Shell
+         YUCCA — Application Shell
          ═══════════════════════════════════════════════════════════════════
          Canvas-first architecture: the DOM is intentionally minimal. Every
          game surface — world, HUD, panels, dialogue, toasts — is rendered
@@ -32,7 +32,7 @@
                    user-scalable=no, viewport-fit=cover" />
 
     <meta name="description"
-          content="A Stitch in Time — an ASCII action-RPG across two dying
+          content="YUCCA — an ASCII action-RPG across two dying
                    realities. Hunt the anomalies before the hour stops." />
     <meta name="theme-color" content="#0B0E14" />
     <meta name="color-scheme" content="dark" />
@@ -42,9 +42,9 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 
-    <title>A Stitch in Time</title>
+    <title>YUCCA</title>
 
-    <!-- Zero-asset favicon: inline SVG, an orange stitch-spark on the void
+    <!-- Zero-asset favicon: inline SVG, an orange yucca-spark on the void
          grid color. No network request, matches the game palette. -->
     <link rel="icon"
           href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'
@@ -60,7 +60,7 @@
          Preloading the primary weight lets the fetch overlap parsing. If the
          WOFF2 is absent during development the @font-face rule fails
          gracefully and the CSS fallback monospace stack takes over. -->
-    <link rel="preload" href="assets/fonts/stitch-mono.woff2"
+    <link rel="preload" href="assets/fonts/yucca-mono.woff2"
           as="font" type="font/woff2" crossorigin />
 
     <link rel="stylesheet" href="src/styles/main.css" />
@@ -85,7 +85,7 @@
     <canvas id="gameCanvas"
             tabindex="0"
             role="application"
-            aria-label="A Stitch in Time — game viewport. Use WASD or arrow
+            aria-label="YUCCA — game viewport. Use WASD or arrow
                         keys to move, Space to act, E to interact."></canvas>
 
     <!-- Screen-reader announcement rail. Systems may write state changes
@@ -96,7 +96,7 @@
     <!-- No-JS rail: shown only when scripting is unavailable. -->
     <noscript>
         <div class="noscript-panel">
-            <h1>A Stitch in Time</h1>
+            <h1>YUCCA</h1>
             <p>
                 This world is woven entirely in JavaScript. Please enable
                 scripting in your browser to step between the Dream and the

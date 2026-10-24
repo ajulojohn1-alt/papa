@@ -2,7 +2,7 @@
  * @file src/ui/HUD.js
  * @module ui/HUD
  * @description
- * Head-up display layer for "A Stitch in Time".
+ * Head-up display layer for "YUCCA".
  *
  * HUD owns every persistent at-a-glance readout: the player's vital bars,
  * the Orange Energy reality anchor, the active-dimension badge, the skill

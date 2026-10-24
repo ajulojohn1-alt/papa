@@ -2,7 +2,7 @@
  * @file src/worlds/WeatherSystem.js
  * @module worlds/WeatherSystem
  * @description
- * Atmospheric simulation for "A Stitch in Time".
+ * Atmospheric simulation for "YUCCA".
  * WeatherSystem owns rain, spore drift, fog, wind, thunderstorm scheduling,
  * and the Dream↔Drab lighting-inversion behavior. It is a pure simulation
  * module: it advances in fixed ticks via update(dt), then stamps weather
@@ -674,6 +674,28 @@ export class WeatherSystem {
     /* ══════════════════════════════════════════════════════════════════
        CONFIGURATION
        ══════════════════════════════════════════════════════════════════ */
+
+    /**
+     * Reseeds the deterministic PRNG from the authoritative server's
+     * global weatherSeed. Multi-client sessions call this once on the
+     * welcome handshake so every client's storm — particle draws, gust
+     * phases, strike delays — flows from the identical mulberry32 stream.
+     * The particle pool is flushed so post-reseed emission restarts from
+     * the shared deterministic head of the stream.
+     * @param {number} seed 32-bit integer seed.
+     * @returns {this}
+     */
+    setSeed(seed) {
+        if (!Number.isInteger(seed) || seed < 0) {
+            throw new RangeError('[WeatherSystem] seed must be a non-negative integer.');
+        }
+        this._seed = seed >>> 0;
+        this._rng = mulberry32(this._seed);
+        this._count = 0;
+        this._metrics.spawnedTotal = 0;
+        this._metrics.recycledTotal = 0;
+        return this;
+    }
 
     /**
      * Updates glyph metrics after Renderer font recalibration.

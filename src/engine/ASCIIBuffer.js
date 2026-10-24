@@ -3,7 +3,7 @@
  * @module engine/ASCIIBuffer
  *
  * @description
- * Virtual 2D character-grid surface for "A Stitch in Time".
+ * Virtual 2D character-grid surface for "YUCCA".
  *
  * ASCIIBuffer is the authoritative simulation-side text surface. All world,
  * combat, weather, water, UI, and transition systems write glyphs and color

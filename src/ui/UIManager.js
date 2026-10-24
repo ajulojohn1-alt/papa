@@ -4,7 +4,7 @@
  * @description
  * Central presentation authority for every head-up display element, modal
  * window, dialogue frame, notification toast, and reality-shift overlay in
- * "A Stitch in Time".
+ * "YUCCA".
  *
  * UIManager is the ONLY subsystem permitted to draw in SCREEN SPACE after
  * the world blit. WorldManager paints the active dimension through the
@@ -1247,7 +1247,7 @@ export class UIManager {
             const glyphSource = typeof safe.glyph === 'string' && safe.glyph.length > 0
                 ? safe.glyph : '?';
             return {
-                name: typeof safe.name === 'string' ? safe.name : 'Unknown stitch',
+                name: typeof safe.name === 'string' ? safe.name : 'Unknown wanderer',
                 glyph: Array.from(glyphSource)[0],
                 count: Math.max(1, Math.round(finiteOr(safe.count, 1))),
                 description: typeof safe.description === 'string' ? safe.description : ''

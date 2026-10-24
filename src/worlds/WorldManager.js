@@ -3,7 +3,7 @@
  * @module worlds/WorldManager
  *
  * @description
- * Dual-world state machine for "A Stitch in Time".
+ * Dual-world state machine for "YUCCA".
  *
  * WorldManager owns the single most important piece of game state: WHICH
  * REALITY IS ACTIVE. It governs the Dream World (vibrant orange groves,

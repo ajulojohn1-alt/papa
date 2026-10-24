@@ -2,7 +2,7 @@
  * @file src/index.js
  * @module index
  * @description
- * Application bootstrap for "A Stitch in Time".
+ * Application bootstrap for "YUCCA".
  *
  * This is the single bridge between the browser and the engine. It owns
  * everything the engine deliberately leaves DOM-agnostic: canvas discovery,
@@ -82,6 +82,7 @@
 
 import { Game } from './core/Game.js';
 import { loadDimensionContent } from './worlds/DimensionContent.js';
+import { NetworkManager } from './network/NetworkManager.js';
 
 /* ══════════════════════════════════════════════════════════════════════════
    CONSTANTS
@@ -277,7 +278,7 @@ function handleWindowError(event) {
         /^(chrome-extension|moz-extension|safari-web-extension):/.test(event.filename)) {
         return;
     }
-    showFatalOverlay('A Stitch in Time hit a snag',
+    showFatalOverlay('YUCCA hit a snag',
         event.message || 'An unexpected error occurred.');
 }
 
@@ -290,7 +291,7 @@ function handleUnhandledRejection(event) {
     const reason = event.reason instanceof Error
         ? event.reason.message
         : String(event.reason);
-    showFatalOverlay('A Stitch in Time hit a snag', reason);
+    showFatalOverlay('YUCCA hit a snag', reason);
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -363,7 +364,7 @@ async function boot() {
     if (bootstrapped) return;
     bootstrapped = true;
 
-    document.title = 'A Stitch in Time';
+    document.title = 'YUCCA';
 
     // ---- DOM dependency checks ---------------------------------------
     canvas = document.getElementById(CANVAS_ID);
@@ -389,8 +390,47 @@ async function boot() {
 
     // ---- Dimension content: maps, player, energy, water, NPCs --------
     // Modules that land through the Game's typed attach() seams. Never
-    // fatal: on a parse failure the engine runs on void grids.
-    window.__content__ = loadDimensionContent(game);
+    // fatal: MapParser_2 degrades corrupted documents to deterministic
+    // procedural fallback dimensions.
+    const content = loadDimensionContent(game);
+    window.__content__ = content;
+
+    // ---- Preloader (kick off early; awaited below) ---------------------
+    const worldsReady = game.start();
+
+    // ---- Multiplayer session -------------------------------------------
+    const network = new NetworkManager();
+    network.attachGame(game);
+    if (content) network.attachPlayer(content.player);
+    game.attachNetworkManager(network);
+    window.__net__ = network;
+
+    /* Server-synchronized deterministic weather: one seed drives every
+     * client's storm (particle draws, gust phases, strike delays). */
+    network.on('seed', ({ seed }) => {
+        game._weather.setSeed(seed);
+        game._loadingScreen.setSeed(seed);
+    });
+
+    /* Loading-screen phase bridging: connecting → connected+seed → ready
+     * once the worlds are preloaded; solo fallback if the server never
+     * answers so the game is ALWAYS enterable. */
+    const loading = game._loadingScreen;
+    loading.setPhase('connecting', 'connecting to the hour…');
+    network.on('connect', () => loading.setPhase('connecting', 'handshaking…'));
+    network.on('welcome', ({ id, seed }) => {
+        loading.setPhase('connected', `connected · wanderer #${id} · storm seed ${seed}`);
+        loading.setProgress(0.95);
+        void worldsReady.then(() => loading.setPhase('ready', 'the grove is listening — press SPACE'));
+    });
+    network.connect();
+
+    const offlineGrace = setTimeout(() => {
+        if (!loading.isReady && network.status !== 'connected') {
+            loading.setPhase('offline', 'server unreachable · solo exploration');
+        }
+    }, 4000);
+    window.addEventListener('pagehide', () => clearTimeout(offlineGrace), { once: true });
 
     // ---- Developer console hook ---------------------------------------
     // Exposed for live debugging: inspect metrics, force dimension shifts,
@@ -399,11 +439,11 @@ async function boot() {
 
     installGlobalListeners();
 
-    // ---- Preloader + loop start ---------------------------------------
-    await game.start();
+    // ---- Await full preload before declaring the engine online ---------
+    await worldsReady;
 
     console.info(
-        '%cA Stitch in Time%c engine online — access it via window.game',
+        '%cYUCCA%c engine online — access it via window.game',
         'color:#ff7700;font-weight:bold;',
         'color:#d7e3ee;'
     );
