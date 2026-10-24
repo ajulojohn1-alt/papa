@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <!-- ═══════════════════════════════════════════════════════════════════
+         A STITCH IN TIME — Application Shell
+         ═══════════════════════════════════════════════════════════════════
+         Canvas-first architecture: the DOM is intentionally minimal. Every
+         game surface — world, HUD, panels, dialogue, toasts — is rendered
+         into the single #gameCanvas by the ASCII engine. The DOM exists to
+         host the canvas, load the monospaced font stack, and provide three
+         safety/accessibility rails:
+
+           1. <noscript>        fallback messaging
+           2. #fatal-error-overlay  (injected at runtime by src/index.js)
+           3. #sr-announcer     aria-live region for screen readers
+
+         Boot contract with src/index.js:
+           • index.js resolves canvas via id "gameCanvas"  — keep the id.
+           • index.js sets document.title itself; the <title> here covers
+             the pre-boot window.
+           • The module script is deferred by specification, so the canvas
+             is guaranteed present when src/index.js evaluates.
+         ═══════════════════════════════════════════════════════════════ -->
+    <meta charset="utf-8" />
+
+    <!-- Viewport: fixed-scale game surface. user-scalable=no + viewport-fit
+         cover give the engine full control of gesture space (pinch-zoom is
+         reserved for future map UX). Accessibility note: all interaction is
+         keyboard-complete, so zoom lock does not trap users. -->
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1.0, maximum-scale=1.0,
+                   user-scalable=no, viewport-fit=cover" />
+
+    <meta name="description"
+          content="A Stitch in Time — an ASCII action-RPG across two dying
+                   realities. Hunt the anomalies before the hour stops." />
+    <meta name="theme-color" content="#0B0E14" />
+    <meta name="color-scheme" content="dark" />
+
+    <!-- Mobile web-app hints (installable shell, no browser chrome). -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+
+    <title>A Stitch in Time</title>
+
+    <!-- Zero-asset favicon: inline SVG, an orange stitch-spark on the void
+         grid color. No network request, matches the game palette. -->
+    <link rel="icon"
+          href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'
+               viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12'
+               fill='%230B0E14'/%3E%3Ctext x='32' y='45' font-family='monospace'
+               font-size='38' fill='%23FF7700'
+               text-anchor='middle'%3E%E2%9C%A6%3C/text%3E%3C/svg%3E" />
+
+    <!-- ═══ Font loading ═══════════════════════════════════════════════════
+         The ASCII renderer measures one 'M' cell once, at construction, and
+         trusts those metrics forever after. The stylesheet therefore loads
+         the game font with font-display:block (no mid-session metric swap).
+         Preloading the primary weight lets the fetch overlap parsing. If the
+         WOFF2 is absent during development the @font-face rule fails
+         gracefully and the CSS fallback monospace stack takes over. -->
+    <link rel="preload" href="assets/fonts/stitch-mono.woff2"
+          as="font" type="font/woff2" crossorigin />
+
+
+    <!-- ES module entry point. Modules are deferred by specification: this
+         executes after HTML parsing, and src/index.js additionally gates on
+         DOMContentLoaded/readyState before touching the DOM. -->
+  <script type="module" crossorigin src="/assets/index-2Ssl5bGB.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-BiApVmQS.css">
+</head>
+
+<body>
+    <!-- ═══════════════════════════════════════════════════════════════════
+         The render surface.
+         tabindex="0"  — makes the canvas keyboard-focusable so WASD/arrow
+                         intent reaches InputManager without a hidden <input>.
+         role="application" + aria-label — identifies the region to ATs as
+                         an interactive application viewport.
+         Sizing is controlled entirely by CSS (100% of the viewport); the
+         physical backing store is then scaled by devicePixelRatio in
+         src/index.js before the Renderer measures cell metrics.
+         ═══════════════════════════════════════════════════════════════ -->
+    <canvas id="gameCanvas"
+            tabindex="0"
+            role="application"
+            aria-label="A Stitch in Time — game viewport. Use WASD or arrow
+                        keys to move, Space to act, E to interact."></canvas>
+
+    <!-- Screen-reader announcement rail. Systems may write state changes
+         (quest accepted, dimension shift) here for assistive tech. Kept
+         visually hidden by .visually-hidden in main.css. -->
+    <div id="sr-announcer" class="visually-hidden" aria-live="polite"></div>
+
+    <!-- No-JS rail: shown only when scripting is unavailable. -->
+    <noscript>
+        <div class="noscript-panel">
+            <h1>A Stitch in Time</h1>
+            <p>
+                This world is woven entirely in JavaScript. Please enable
+                scripting in your browser to step between the Dream and the
+                Drab.
+            </p>
+        </div>
+    </noscript>
+</body>
+</html>

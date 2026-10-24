@@ -12,7 +12,7 @@
  * The GameLoop header is explicit about this split of responsibility:
  * "This class is DOM-agnostic beyond rAF/cAF: it registers no window or
  *  document listeners. Visibility-based pause/resume and resize refits are
- *  owned by src/main.js." This module is that owner.
+ *  owned by src/index.js." This module is that owner.
  *
  * ───────────────────────────────────────────────────────────────────────────
  * BOOT SEQUENCE
@@ -81,6 +81,7 @@
  */
 
 import { Game } from './core/Game.js';
+import { loadDimensionContent } from './worlds/DimensionContent.js';
 
 /* ══════════════════════════════════════════════════════════════════════════
    CONSTANTS
@@ -385,6 +386,11 @@ async function boot() {
 
     // ---- Master orchestrator -----------------------------------------
     game = new Game(canvas, readBootOptions());
+
+    // ---- Dimension content: maps, player, energy, water, NPCs --------
+    // Modules that land through the Game's typed attach() seams. Never
+    // fatal: on a parse failure the engine runs on void grids.
+    window.__content__ = loadDimensionContent(game);
 
     // ---- Developer console hook ---------------------------------------
     // Exposed for live debugging: inspect metrics, force dimension shifts,

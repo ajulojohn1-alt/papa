@@ -8,7 +8,7 @@
  * Game owns the canvas, constructs every subsystem in dependency order,
  * binds the fixed-timestep loop, runs the global application state
  * machine, and fans dimension-shift events out to world, audio, weather,
- * entity, and UI layers. It is the single object `main.js` instantiates.
+ * entity, and UI layers. It is the single object `src/index.js` instantiates.
  *
  * ───────────────────────────────────────────────────────────────────────────
  * SUBSYSTEM INITIALIZATION ORDER (DEPENDENCY-DRIVEN)
@@ -674,11 +674,6 @@ export class Game {
             this._worlds.update(dt, null);
         }
 
-        /* Ambient weather in menu + gameplay states. */
-        if (worldActive || this._state === GAME_STATE.MAIN_MENU) {
-            this._weather.update(dt);
-        }
-
         switch (this._state) {
             case GAME_STATE.MAIN_MENU:
                 this._updateMainMenu();
@@ -697,6 +692,17 @@ export class Game {
                 break;
             default:
                 break; // LOADING is driven by start()'s async boot.
+        }
+
+        /* Ambient weather + water shader advance AFTER entity updates so a
+         * tick's entity motion is already committed when reflections and
+         * particle emission run. Order is contractual: entities → weather
+         * → water. */
+        if (worldActive || this._state === GAME_STATE.MAIN_MENU) {
+            this._weather.update(dt);
+            if (this._waterShader && typeof this._waterShader.update === 'function') {
+                this._waterShader.update(dt);
+            }
         }
     }
 
@@ -990,10 +996,16 @@ export class Game {
         if (this._entities && typeof this._entities.render === 'function') {
             this._entities.render(buffer, camera, alpha);
         }
-        if (this._waterShader && typeof this._waterShader.render === 'function') {
-            this._waterShader.render(buffer, camera, this._simTime);
-        }
         this._weather.render(buffer, camera);
+
+        /* Water runs last, AFTER weather: the shader is a full-buffer
+         * post-processor in integer grid cells (NOT camera space), and its
+         * mirror sources include every glyph stamped above the surface —
+         * terrain, entities, and weather alike. Its clock is owned by
+         * update(dt), not by render arguments. */
+        if (this._waterShader && typeof this._waterShader.render === 'function') {
+            this._waterShader.render(buffer);
+        }
 
         this._worlds.render(renderer, alpha);
     }
@@ -1109,7 +1121,7 @@ export class Game {
 
     /**
      * Propagates a resize / DPR change through renderer, camera, and weather.
-     * Called by main.js from its coalesced resize handler.
+     * Called by src/index.js from its coalesced resize handler.
      * @param {{cssWidth: number, cssHeight: number, dpr: number}} [displayInfo]
      * @returns {this}
      */

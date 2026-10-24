@@ -252,6 +252,14 @@ export class WaterShader {
         /** @type {boolean} Reflect blank (space + transparent bg) cells. */
         this._reflectBlank = Boolean(options.reflectBlank);
 
+        /* Tint caches must exist BEFORE setTintStrength(): it clears them
+         * on every call, so allocating them later detonated the very first
+         * construction. */
+        /** @type {Map<number, number>} */
+        this._fgCache = new Map();
+        /** @type {Map<number, number>} */
+        this._bgCache = new Map();
+
         this._fgTintPacked = this._packConfigColor(options.fgTint ?? DEFAULT_FG_TINT);
         this._bgTintPacked = this._packConfigColor(options.bgTint ?? DEFAULT_BG_TINT);
         this._waterBgPacked = this._packConfigColor(options.waterBaseColor ?? DEFAULT_WATER_BASE);
@@ -274,12 +282,6 @@ export class WaterShader {
         this._offsetTableRows = -1;
         /** @type {number} Time the offset table was built at. */
         this._offsetTableTime = Number.NaN;
-
-        /* ---- Tint caches (source packed color → tinted RGB, alpha=255) */
-        /** @type {Map<number, number>} */
-        this._fgCache = new Map();
-        /** @type {Map<number, number>} */
-        this._bgCache = new Map();
 
         /* ---- Diagnostics ----------------------------------------------- */
         /** @type {Object} Lifetime counters for the debug HUD. */

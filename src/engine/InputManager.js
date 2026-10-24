@@ -305,7 +305,7 @@ export class InputManager {
 
     /**
      * Removes every listener registered by _attach() and clears all state.
-     * Call during engine shutdown (main.js wires this to pagehide) or before
+     * Call during engine shutdown (Game.destroy() invokes this) or before
      * discarding the manager in tests. After destroy(), the instance must
      * not be reused.
      *

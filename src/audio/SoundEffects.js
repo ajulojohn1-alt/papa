@@ -258,7 +258,7 @@ export class SoundEffects {
      */
     constructor(engine, options = {}) {
         if (!engine || typeof engine._playTone !== 'function' ||
-            typeof engine._playNoise !== 'function' || !engine._ctx) {
+            typeof engine._playNoise !== 'function') {
             throw new TypeError(
                 '[SoundEffects] A booted-or-bootable AudioEngine instance is required.'
             );
@@ -269,10 +269,19 @@ export class SoundEffects {
 
         /** @type {import('./AudioEngine.js').AudioEngine} */
         this._engine = engine;
-        /** @type {AudioContext} Shared audio clock and node factory. */
-        this._ctx = engine._ctx;
-        /** @type {GainNode} Destination bus (engine SFX chain). */
-        this._bus = engine._sfxGain;
+        /**
+         * Silent mode: the AudioEngine itself degrades to a mute no-op when
+         * the Web Audio API is unavailable (sandboxed frames, embedded
+         * webviews, audio-blocked permissions). The SFX library must degrade
+         * the same way rather than abort the whole engine bootstrap — a
+         * muted game is playable; a dead one is not.
+         * @type {boolean}
+         */
+        this._silent = engine._ctx == null;
+        /** @type {?AudioContext} Shared audio clock and node factory. */
+        this._ctx = engine._ctx ?? null;
+        /** @type {?GainNode} Destination bus (engine SFX chain). */
+        this._bus = engine._sfxGain ?? null;
 
         /* ---- Deterministic randomness -------------------------------- */
         const seed = Number.isInteger(options.seed)
@@ -498,7 +507,7 @@ export class SoundEffects {
      * @returns {boolean} True if the effect was dispatched.
      */
     play(name, opts = {}) {
-        if (this._destroyed || this._engine.isLocked) return false;
+        if (this._destroyed || this._silent || this._engine.isLocked) return false;
         const entry = this._library.get(name);
         if (!entry) {
             if (!this._warnedNames.has(name)) {

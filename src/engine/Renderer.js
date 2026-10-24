@@ -37,7 +37,7 @@
  * ───────────────────────────────────────────────────────────────────────────
  * COORDINATE TRANSFORMATION MATH
  * ───────────────────────────────────────────────────────────────────────────
- * The backing store is pre-scaled by devicePixelRatio upstream (main.js).
+ * The backing store is pre-scaled by devicePixelRatio upstream (src/index.js).
  * This Renderer installs the transform:
  *
  *   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
@@ -127,7 +127,7 @@ export class Renderer {
     /**
      * @param {CanvasRenderingContext2D} ctx
      *   2D context of #gameCanvas. Must already be configured for the
-     *   physical backing-store size by main.js.
+     *   physical backing-store size by src/index.js.
      * @param {?{
      *   cssWidth: number,
      *   cssHeight: number,
@@ -305,7 +305,7 @@ export class Renderer {
 
     /**
      * Re-applies display calibration after a window resize or DPR change.
-     * Called by main.js from its coalesced resize handler.
+     * Called by src/index.js from its coalesced resize handler.
      *
      * @param {{
      *   cssWidth: number,

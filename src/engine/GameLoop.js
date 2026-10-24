@@ -100,7 +100,7 @@
  *
  * This class is DOM-agnostic beyond rAF/cAF: it registers no window or
  * document listeners. Visibility-based pause/resume and resize refits are
- * owned by src/main.js, keeping the loop unit-testable in isolation.
+ * owned by src/index.js, keeping the loop unit-testable in isolation.
  *
  * @example
  * const loop = new GameLoop({
@@ -833,7 +833,7 @@ export class GameLoop {
         } catch (error) {
             /* Fail closed: stop the pump, then surface the original error
              * unchanged so stack traces and error types survive to the
-             * browser's global handler (and to main.js's overlay hook). */
+             * browser's global handler (and to src/index.js's overlay hook.. */
             this.stop();
             throw error;
         }

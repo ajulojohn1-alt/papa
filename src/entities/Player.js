@@ -452,6 +452,17 @@ export class Player extends Entity {
         return this;
     }
 
+    /**
+     * Dimension form swap under the name the Game orchestrator's
+     * worldchanged fan-out expects (poncho ↔ suit). Delegates to
+     * setWorld(); see Game._onWorldChanged.
+     * @param {string} world 'DREAM' or 'DRAB'.
+     * @returns {this}
+     */
+    setDimension(world) {
+        return this.setWorld(world);
+    }
+
     /* ══════════════════════════════════════════════════════════════════
        ENERGY HELPERS
        ══════════════════════════════════════════════════════════════════ */
@@ -479,6 +490,21 @@ export class Player extends Entity {
         const max = this._energySystem.maxEnergy;
         if (!Number.isFinite(max) || max <= 0) return 1;
         return Math.min(1, Math.max(0, this._energySystem.energy / max));
+    }
+
+    /**
+     * Orange reserve read-through for the HUD provider contract
+     * ({oranges, maxOranges} on the attached player). The EnergySystem
+     * remains the single owner; these getters only bridge.
+     * @returns {number} Current oranges (Infinity when no system = infinite).
+     */
+    get oranges() {
+        return this._energySystem ? this._energySystem.energy : Infinity;
+    }
+
+    /** @returns {number} Orange pool ceiling (Infinity when no system). */
+    get maxOranges() {
+        return this._energySystem ? this._energySystem.maxEnergy : Infinity;
     }
 
     /** @returns {boolean} True while sprint is locked out by exhaustion. */
